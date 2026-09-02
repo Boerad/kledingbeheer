@@ -60,6 +60,7 @@ const [members, setMembers] = useState<MemberSummary[]>([]);
 const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
 const [clothingDetails, setClothingDetails] = useState<ClothingStatus[]>([]);
 const [availableItems, setAvailableItems] = useState<IndividualItem[]>([]);
+const [inventoryItems, setInventoryItems] = useState<IndividualItem[]>([]);
 const [currentAssignments, setCurrentAssignments] = useState<CurrentAssignment[]>([]);
 const [returnConditions, setReturnConditions] = useState<
   Record<number, "good" | "damaged">
@@ -98,6 +99,22 @@ async function loadAvailableItems(articleTypeId: number) {
   }
 
   setAvailableItems((data ?? []) as IndividualItem[]);
+}
+async function loadInventoryItems() {
+  const { data, error } = await supabase
+    .from("individual_items")
+    .select(
+      "id, article_type_id, size_id, unique_number, status, condition"
+    );
+
+  if (error) {
+    setMessage(
+      "Voorraad kon niet worden geladen: " + error.message
+    );
+    return;
+  }
+
+  setInventoryItems((data ?? []) as IndividualItem[]);
 }
 async function issueItem(
   memberId: number,
@@ -298,6 +315,7 @@ setMembers(memberRows);
     );
 
     setTeamBagsWithShortage(uniqueBags.size);
+await loadInventoryItems();
   }
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
@@ -379,6 +397,23 @@ setMembers(memberRows);
               </p>
             </div>
           </div>
+<div className="mt-8 rounded-2xl bg-white p-6 shadow">
+  <h2 className="text-lg font-bold text-gray-900">
+    Voorraadoverzicht
+  </h2>
+<p className="mt-2 text-sm text-gray-600">
+  Totaal kledingstukken: {inventoryItems.length}
+</p>
+<p className="mt-1 text-sm text-gray-600">
+  Beschikbaar: {inventoryItems.filter((item) => item.status === "available").length}
+</p>
+<p className="mt-1 text-sm text-gray-600">
+  Uitgegeven: {inventoryItems.filter((item) => item.status === "issued").length}
+</p>
+<p className="mt-1 text-sm text-gray-600">
+  Beschadigd: {inventoryItems.filter((item) => item.status === "damaged").length}
+</p>
+</div>
 <div className="mt-8 overflow-hidden rounded-2xl bg-white shadow">
   <div className="border-b border-gray-200 px-6 py-4">
     <h2 className="text-xl font-bold text-gray-900">
