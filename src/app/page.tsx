@@ -30,6 +30,21 @@ type IndividualItem = {
   status: string;
   condition: string;
 };
+type IndividualItem = {
+};
+
+type ArticleType = {
+  id: number;
+  name: string;
+};
+type InventorySummary = {
+  article_type_id: number;
+  article: string;
+  total: number;
+  available: number;
+  issued: number;
+  damaged: number;
+};
 type CurrentAssignment = {
   id: number;
   member_id: number;
@@ -61,6 +76,21 @@ const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
 const [clothingDetails, setClothingDetails] = useState<ClothingStatus[]>([]);
 const [availableItems, setAvailableItems] = useState<IndividualItem[]>([]);
 const [inventoryItems, setInventoryItems] = useState<IndividualItem[]>([]);
+const [articleTypes, setArticleTypes] = useState<ArticleType[]>([]);
+const inventorySummary: InventorySummary[] = articleTypes.map((articleType) => {
+  const items = inventoryItems.filter(
+    (item) => item.article_type_id === articleType.id
+  );
+
+  return {
+    article_type_id: articleType.id,
+    article: articleType.name,
+    total: items.length,
+    available: items.filter((item) => item.status === "available").length,
+    issued: items.filter((item) => item.status === "issued").length,
+    damaged: items.filter((item) => item.status === "damaged").length,
+  };
+});
 const [currentAssignments, setCurrentAssignments] = useState<CurrentAssignment[]>([]);
 const [returnConditions, setReturnConditions] = useState<
   Record<number, "good" | "damaged">
@@ -115,6 +145,20 @@ async function loadInventoryItems() {
   }
 
   setInventoryItems((data ?? []) as IndividualItem[]);
+}
+async function loadArticleTypes() {
+  const { data, error } = await supabase
+    .from("article_types")
+    .select("id, name");
+
+  if (error) {
+    setMessage(
+      "Artikelsoorten konden niet worden geladen: " + error.message
+    );
+    return;
+  }
+
+  setArticleTypes((data ?? []) as ArticleType[]);
 }
 async function issueItem(
   memberId: number,
@@ -316,6 +360,7 @@ setMembers(memberRows);
 
     setTeamBagsWithShortage(uniqueBags.size);
 await loadInventoryItems();
+await loadArticleTypes();
   }
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
@@ -413,6 +458,51 @@ await loadInventoryItems();
 <p className="mt-1 text-sm text-gray-600">
   Beschadigd: {inventoryItems.filter((item) => item.status === "damaged").length}
 </p>
+<div className="mt-6 overflow-x-auto">
+  <table className="w-full text-left">
+    <thead className="border-b border-gray-200">
+      <tr>
+        <th className="px-3 py-2 text-sm font-medium text-gray-600">
+          Kledingstuk
+        </th>
+        <th className="px-3 py-2 text-sm font-medium text-gray-600">
+          Totaal
+        </th>
+        <th className="px-3 py-2 text-sm font-medium text-gray-600">
+          Beschikbaar
+        </th>
+        <th className="px-3 py-2 text-sm font-medium text-gray-600">
+          Uitgegeven
+        </th>
+        <th className="px-3 py-2 text-sm font-medium text-gray-600">
+          Beschadigd
+        </th>
+      </tr>
+    </thead>
+
+    <tbody>
+      {inventorySummary.map((item) => (
+        <tr key={item.article_type_id} className="border-b border-gray-100">
+          <td className="px-3 py-2 text-sm text-gray-700">
+            {item.article}
+          </td>
+          <td className="px-3 py-2 text-sm text-gray-700">
+            {item.total}
+          </td>
+          <td className="px-3 py-2 text-sm text-gray-700">
+            {item.available}
+          </td>
+          <td className="px-3 py-2 text-sm text-gray-700">
+            {item.issued}
+          </td>
+          <td className="px-3 py-2 text-sm text-gray-700">
+            {item.damaged}
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
 </div>
 <div className="mt-8 overflow-hidden rounded-2xl bg-white shadow">
   <div className="border-b border-gray-200 px-6 py-4">
