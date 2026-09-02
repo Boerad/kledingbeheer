@@ -21,6 +21,7 @@ type ClothingStatus = {
   expected_quantity: number | null;
   issued_quantity: number | string | null;
   missing_quantity: number | string | null;
+choice_group: string | null;
 };
 type IndividualItem = {
   id: number;
@@ -34,6 +35,13 @@ type IndividualItem = {
 type ArticleType = {
   id: number;
   name: string;
+};
+type MemberTypeEntitlement = {
+  member_type_id: number;
+  article_type_id: number;
+  quantity: number;
+sort_order: number | null;
+choice_group: string | null;
 };
 type InventorySummary = {
   article_type_id: number;
@@ -64,18 +72,82 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
-
   const [memberCount, setMemberCount] = useState(0);
   const [issuedTotal, setIssuedTotal] = useState(0);
   const [missingTotal, setMissingTotal] = useState(0);
   const [teamBagsWithShortage, setTeamBagsWithShortage] = useState(0);
 const [members, setMembers] = useState<MemberSummary[]>([]);
+const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
 const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
 const [clothingDetails, setClothingDetails] = useState<ClothingStatus[]>([]);
 const [availableItems, setAvailableItems] = useState<IndividualItem[]>([]);
 const [inventoryItems, setInventoryItems] = useState<IndividualItem[]>([]);
 const [articleTypes, setArticleTypes] = useState<ArticleType[]>([]);
-const inventorySummary: InventorySummary[] = articleTypes.map((articleType) => {
+const [memberTypeEntitlements, setMemberTypeEntitlements] = useState<
+  MemberTypeEntitlement[]
+>([]);
+const memberTypeIds: Record<string, number> = {
+  Speler: 1,
+  Selectiespeler: 2,
+  Trainer: 3,
+};
+const selectedGroupEntitlements = selectedGroup
+  ? memberTypeEntitlements.filter(
+      (entitlement) =>
+        entitlement.member_type_id === memberTypeIds[selectedGroup]
+    )
+  : memberTypeEntitlements;
+const selectedGroupArticleTypeIds = selectedGroupEntitlements.map(
+  (entitlement) => entitlement.article_type_id
+);
+const filteredInventoryItems = selectedGroup
+  ? inventoryItems.filter((item) =>
+      selectedGroupArticleTypeIds.includes(item.article_type_id)
+    )
+  : inventoryItems;
+const filteredMembers = selectedGroup
+  ? members.filter((member) => member.member_type === selectedGroup)
+  : members;
+const groupedClothingDetails = clothingDetails.reduce<
+  Record<string, ClothingStatus[]>
+>((groups, item) => {
+  const key = item.choice_group ?? `article-${item.article_type_id}`;
+
+  if (!groups[key]) {
+    groups[key] = [];
+  }
+
+  groups[key].push(item);
+  return groups;
+}, {});
+const selectedGroupIssuedTotal = filteredMembers.reduce(
+  (total, member) => total + Number(member.issued_total ?? 0),
+  0
+);
+const selectedGroupMissingTotal = filteredMembers.reduce(
+  (total, member) => total + Number(member.missing_total ?? 0),
+  0
+);
+const inventorySummary: InventorySummary[] = articleTypes
+  .filter(
+    (articleType) =>
+      !selectedGroup ||
+      selectedGroupArticleTypeIds.includes(articleType.id)
+  )
+  .sort((a, b) => {
+    const aOrder =
+      selectedGroupEntitlements.find(
+        (entitlement) => entitlement.article_type_id === a.id
+      )?.sort_order ?? 999;
+
+    const bOrder =
+      selectedGroupEntitlements.find(
+        (entitlement) => entitlement.article_type_id === b.id
+      )?.sort_order ?? 999;
+
+    return aOrder - bOrder;
+  })
+  .map((articleType) => {
   const items = inventoryItems.filter(
     (item) => item.article_type_id === articleType.id
   );
@@ -92,6 +164,9 @@ const inventorySummary: InventorySummary[] = articleTypes.map((articleType) => {
 const [currentAssignments, setCurrentAssignments] = useState<CurrentAssignment[]>([]);
 const [returnConditions, setReturnConditions] = useState<
   Record<number, "good" | "damaged">
+>({});
+const [selectedChoiceArticles, setSelectedChoiceArticles] = useState<
+  Record<string, number>
 >({});
 async function loadCurrentAssignments(memberId: number) {
   const { data, error } = await supabase
@@ -143,6 +218,24 @@ async function loadInventoryItems() {
   }
 
   setInventoryItems((data ?? []) as IndividualItem[]);
+}
+async function loadMemberTypeEntitlements() {
+  const { data, error } = await supabase
+    .from("member_type_entitlements")
+    .select(
+  "member_type_id, article_type_id, quantity, sort_order, choice_group"
+);
+
+  if (error) {
+    setMessage(
+      "Kledingrechten konden niet worden geladen: " + error.message
+    );
+    return;
+  }
+
+  setMemberTypeEntitlements(
+    (data ?? []) as MemberTypeEntitlement[]
+  );
 }
 async function loadArticleTypes() {
   const { data, error } = await supabase
@@ -282,8 +375,8 @@ async function loadMemberDetails(memberId: number) {
   const { data, error } = await supabase
     .from("member_clothing_status")
     .select(
-      "member_id, article_type_id, article, expected_quantity, issued_quantity, missing_quantity"
-    )
+  "member_id, article_type_id, article, expected_quantity, issued_quantity, missing_quantity, choice_group"
+)
     .eq("member_id", memberId);
 
   if (error) {
@@ -359,6 +452,7 @@ setMembers(memberRows);
     setTeamBagsWithShortage(uniqueBags.size);
 await loadInventoryItems();
 await loadArticleTypes();
+await loadMemberTypeEntitlements();
   }
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
@@ -402,14 +496,53 @@ await loadArticleTypes();
               <p className="text-sm text-red-700">{message}</p>
             </div>
           )}
+<div className="mb-8 grid gap-4 md:grid-cols-3">
+  <button
+    type="button"
+    onClick={() => setSelectedGroup("Trainer")}
+    className="rounded-2xl bg-white p-6 text-left shadow hover:bg-gray-50"
+  >
+    <p className="text-lg font-bold text-gray-900">
+      Trainers
+    </p>
+    <p className="mt-2 text-sm text-gray-600">
+      Personen, uitgegeven kleding en voorraad voor trainers
+    </p>
+  </button>
 
+  <button
+    type="button"
+    onClick={() => setSelectedGroup("Speler")}
+    className="rounded-2xl bg-white p-6 text-left shadow hover:bg-gray-50"
+  >
+    <p className="text-lg font-bold text-gray-900">
+      Spelers
+    </p>
+    <p className="mt-2 text-sm text-gray-600">
+      Personen, uitgegeven kleding en voorraad voor spelers
+    </p>
+  </button>
+
+  <button
+    type="button"
+    onClick={() => setSelectedGroup("Selectiespeler")}
+    className="rounded-2xl bg-white p-6 text-left shadow hover:bg-gray-50"
+  >
+    <p className="text-lg font-bold text-gray-900">
+      Selectiespelers
+    </p>
+    <p className="mt-2 text-sm text-gray-600">
+      Personen, uitgegeven kleding en voorraad voor selectiespelers
+    </p>
+  </button>
+</div>
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-2xl bg-white p-6 shadow">
               <p className="text-sm text-gray-500">
                 Aantal personen
               </p>
               <p className="mt-2 text-3xl font-bold text-gray-900">
-                {memberCount}
+                {selectedGroup ? filteredMembers.length : memberCount}
               </p>
             </div>
 
@@ -418,7 +551,7 @@ await loadArticleTypes();
                 Uitgegeven kledingstukken
               </p>
               <p className="mt-2 text-3xl font-bold text-gray-900">
-                {issuedTotal}
+                {selectedGroup ? selectedGroupIssuedTotal : issuedTotal}
               </p>
             </div>
 
@@ -427,7 +560,7 @@ await loadArticleTypes();
                 Ontbrekende kledingstukken
               </p>
               <p className="mt-2 text-3xl font-bold text-gray-900">
-                {missingTotal}
+                {selectedGroup ? selectedGroupMissingTotal : missingTotal}
               </p>
             </div>
 
@@ -445,16 +578,16 @@ await loadArticleTypes();
     Voorraadoverzicht
   </h2>
 <p className="mt-2 text-sm text-gray-600">
-  Totaal kledingstukken: {inventoryItems.length}
+  Totaal kledingstukken: {filteredInventoryItems.length}
 </p>
 <p className="mt-1 text-sm text-gray-600">
-  Beschikbaar: {inventoryItems.filter((item) => item.status === "available").length}
+  Beschikbaar: {filteredInventoryItems.filter((item) => item.status === "available").length}
 </p>
 <p className="mt-1 text-sm text-gray-600">
-  Uitgegeven: {inventoryItems.filter((item) => item.status === "issued").length}
+  Uitgegeven: {filteredInventoryItems.filter((item) => item.status === "issued").length}
 </p>
 <p className="mt-1 text-sm text-gray-600">
-  Beschadigd: {inventoryItems.filter((item) => item.status === "damaged").length}
+  Beschadigd: {filteredInventoryItems.filter((item) => item.status === "damaged").length}
 </p>
 <div className="mt-6 overflow-x-auto">
   <table className="w-full text-left">
@@ -535,7 +668,7 @@ await loadArticleTypes();
       </thead>
 
       <tbody>
-        {members.map((member) => (
+       {filteredMembers.map((member) => (
          <tr
   key={member.member_id}
   onClick={() => loadMemberDetails(member.member_id)}
@@ -651,43 +784,82 @@ await loadArticleTypes();
         </thead>
 
         <tbody>
-          {clothingDetails.map((item) => (
+          {Object.entries(groupedClothingDetails).map(([groupKey, items]) => {
+  const item = items[0];
+const groupExpected = Math.max(
+  ...items.map((groupItem) => Number(groupItem.expected_quantity ?? 0))
+);
+
+const groupIssued = items.reduce(
+  (total, groupItem) =>
+    total + Number(groupItem.issued_quantity ?? 0),
+  0
+);
+
+const groupMissing = Math.max(groupExpected - groupIssued, 0);
+  return (
             <tr
               key={item.article_type_id}
               className="border-t border-gray-100"
             >
               <td className="px-6 py-4 text-gray-900">
-                {item.article ?? "-"}
+                {item.choice_group === "tas" ? "Tas" : item.article ?? "-"}
               </td>
 
               <td className="px-6 py-4 text-gray-600">
-                {item.expected_quantity ?? 0}
+                {groupExpected}
               </td>
 
               <td className="px-6 py-4 text-gray-600">
-                {item.issued_quantity ?? 0}
+                {groupIssued}
               </td>
 
               <td className="px-6 py-4 text-gray-600">
-                {item.missing_quantity ?? 0}
+                {groupMissing}
               </td>
 <td className="px-6 py-4">
-  {Number(item.missing_quantity ?? 0) > 0 ? (
+{groupMissing > 0 ? (
+  <>
+{item.choice_group === "tas" && (
+  <select
+    value={selectedChoiceArticles[groupKey] ?? items[0].article_type_id}
+    onChange={(e) =>
+      setSelectedChoiceArticles((prev) => ({
+        ...prev,
+        [groupKey]: Number(e.target.value),
+      }))
+    }
+    className="mb-2 block rounded-lg border border-gray-300 px-2 py-2 text-sm"
+  >
+    {items.map((choice) => (
+      <option key={choice.article_type_id} value={choice.article_type_id}>
+        {choice.article}
+      </option>
+    ))}
+  </select>
+)}
     <button
       type="button"
  onClick={() =>
-  issueItem(selectedMemberId, item.article_type_id)
+  issueItem(
+  selectedMemberId,
+  item.choice_group === "tas"
+    ? selectedChoiceArticles[groupKey] ?? items[0].article_type_id
+    : item.article_type_id
+)
 }
       className="rounded-lg bg-gray-900 px-3 py-2 text-sm font-medium text-white hover:bg-gray-700"
     >
       Uitgeven
-    </button>
-  ) : (
+</button>
+  </>
+) : (
     <span className="text-sm text-gray-400">Compleet</span>
   )}
 </td>
             </tr>
-          ))}
+         );
+})}
         </tbody>
       </table>
     </div>
