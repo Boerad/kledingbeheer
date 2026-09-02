@@ -30,8 +30,6 @@ type IndividualItem = {
   status: string;
   condition: string;
 };
-type IndividualItem = {
-};
 
 type ArticleType = {
   id: number;
