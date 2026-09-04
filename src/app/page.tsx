@@ -31,6 +31,10 @@ type IndividualItem = {
   status: string;
   condition: string;
 };
+type Size = {
+  id: number;
+  name: string;
+};
 
 type ArticleType = {
   id: number;
@@ -168,6 +172,27 @@ const [returnConditions, setReturnConditions] = useState<
 const [selectedChoiceArticles, setSelectedChoiceArticles] = useState<
   Record<string, number>
 >({});
+const [issueNumbers, setIssueNumbers] = useState<
+  Record<string, string>
+>({});
+const [issueWithoutNumber, setIssueWithoutNumber] = useState<
+  Record<string, boolean>
+>({});
+const [issueSizes, setIssueSizes] = useState<
+  Record<string, number>
+>({});
+const [sizes, setSizes] = useState<Size[]>([]);
+const [newStockArticleId, setNewStockArticleId] = useState<number | null>(null);
+const [newStockSizeId, setNewStockSizeId] = useState<number | null>(null);
+const [newStockNumber, setNewStockNumber] = useState("");
+const [newStockWithoutNumber, setNewStockWithoutNumber] = useState(false);
+const [newStockQuantity, setNewStockQuantity] = useState(1);
+const [issueMessages, setIssueMessages] = useState<
+  Record<string, string>
+>({});
+const [numberSizeLabels, setNumberSizeLabels] = useState<
+  Record<string, string>
+>({});
 async function loadCurrentAssignments(memberId: number) {
   const { data, error } = await supabase
     .from("current_item_assignments")
@@ -251,31 +276,154 @@ async function loadArticleTypes() {
 
   setArticleTypes((data ?? []) as ArticleType[]);
 }
-async function issueItem(
-  memberId: number,
-  articleTypeId: number
-) {
+async function addStockItem() {
   setMessage("");
 
-  const { data: items, error: itemsError } = await supabase
+  if (newStockArticleId === null || newStockSizeId === null) {
+    setMessage("Kies eerst een kledingstuk en een maat.");
+    return;
+  }
+ if (!newStockWithoutNumber && !newStockNumber.trim()) {
+    setMessage("Vul een nummer in of kies Geen nummer.");
+    return;
+  }
+const stockItems = Array.from(
+  { length: newStockWithoutNumber ? newStockQuantity : 1 },
+  () => ({
+    article_type_id: newStockArticleId,
+    size_id: newStockSizeId,
+    unique_number: newStockWithoutNumber
+      ? null
+      : newStockNumber.trim(),
+    status: "available",
+    condition: "good",
+  })
+);
+
+const { error } = await supabase
+  .from("individual_items")
+  .insert(stockItems);
+
+if (error) {
+  setMessage("Voorraad kon niet worden toegevoegd: " + error.message);
+  return;
+}
+
+setMessage(
+  newStockWithoutNumber
+    ? `${newStockQuantity} kledingstukken zijn toegevoegd aan de voorraad.`
+    : `Kledingstuk ${newStockNumber.trim()} is toegevoegd aan de voorraad.`
+);
+setNewStockArticleId(null);
+setNewStockSizeId(null);
+setNewStockNumber("");
+setNewStockWithoutNumber(false);
+setNewStockQuantity(1);
+await loadDashboard(); 
+}
+async function loadSizes() {
+  const { data, error } = await supabase
+    .from("sizes")
+    .select("id, name");
+
+  if (error) {
+    setMessage("Maten konden niet worden geladen: " + error.message);
+    return;
+  }
+
+  setSizes((data ?? []) as Size[]);
+}
+async function loadSizeForNumber(
+  groupKey: string,
+  articleTypeId: number,
+  uniqueNumber: string
+) {
+  if (!uniqueNumber.trim()) {
+    setNumberSizeLabels((prev) => ({
+      ...prev,
+      [groupKey]: "",
+    }));
+    return;
+  }
+
+  const { data, error } = await supabase
     .from("individual_items")
-    .select("id, unique_number")
+    .select("size_id")
     .eq("article_type_id", articleTypeId)
-    .eq("status", "available")
-    .limit(1);
+    .eq("unique_number", uniqueNumber.trim())
+    .maybeSingle();
+
+  if (error) {
+    setNumberSizeLabels((prev) => ({
+      ...prev,
+      [groupKey]: "Maat kon niet worden opgehaald",
+    }));
+    return;
+  }
+
+  if (!data?.size_id) {
+    setNumberSizeLabels((prev) => ({
+      ...prev,
+      [groupKey]: "Nummer niet gevonden in voorraad",
+    }));
+    return;
+  }
+
+  const size = sizes.find((entry) => entry.id === data.size_id);
+
+  setNumberSizeLabels((prev) => ({
+    ...prev,
+    [groupKey]: size?.name ?? "Onbekende maat",
+  }));
+}
+async function issueItem(
+  memberId: number,
+  articleTypeId: number,
+  uniqueNumber: string,
+  sizeId: number | null,
+  groupKey: string
+) {
+ setMessage("");
+
+if (!uniqueNumber.trim() && sizeId === null) {
+  setIssueMessages((prev) => ({
+    ...prev,
+    [groupKey]: "Vul een nummer in of kies een maat.",
+  }));
+  return;
+}
+
+ let itemQuery = supabase
+  .from("individual_items")
+  .select("id, unique_number")
+  .eq("article_type_id", articleTypeId)
+  .eq("status", "available");
+
+if (uniqueNumber.trim()) {
+  itemQuery = itemQuery.eq("unique_number", uniqueNumber.trim());
+} else if (sizeId !== null) {
+  itemQuery = itemQuery.eq("size_id", sizeId);
+}
+
+const { data: items, error: itemsError } = await itemQuery.limit(1);
 
   if (itemsError) {
-    setMessage(
+  setIssueMessages((prev) => ({
+    ...prev,
+    [groupKey]:
       "Beschikbare kleding kon niet worden geladen: " +
-        itemsError.message
-    );
-    return;
-  }
+      itemsError.message,
+  }));
+  return;
+}
 
-  if (!items || items.length === 0) {
-    setMessage("Er is geen beschikbaar kledingstuk op voorraad.");
-    return;
-  }
+ if (!items || items.length === 0) {
+  setIssueMessages((prev) => ({
+    ...prev,
+    [groupKey]: "Er is geen passend kledingstuk op voorraad.",
+  }));
+  return;
+}
 
   const item = items[0];
 
@@ -287,31 +435,37 @@ async function issueItem(
       issued_date: new Date().toISOString().split("T")[0],
     });
 
-  if (assignmentError) {
-    setMessage(
+ if (assignmentError) {
+  setIssueMessages((prev) => ({
+    ...prev,
+    [groupKey]:
       "Kledingstuk kon niet worden uitgegeven: " +
-        assignmentError.message
-    );
-    return;
-  }
+      assignmentError.message,
+  }));
+  return;
+}
 
   const { error: updateError } = await supabase
     .from("individual_items")
     .update({ status: "issued" })
     .eq("id", item.id);
 
-  if (updateError) {
-    setMessage(
+ if (updateError) {
+  setIssueMessages((prev) => ({
+    ...prev,
+    [groupKey]:
       "Status van kledingstuk kon niet worden bijgewerkt: " +
-        updateError.message
-    );
-    return;
-  }
+      updateError.message,
+  }));
+  return;
+}
 
-  setMessage(
-    `Kledingstuk ${item.unique_number} is succesvol uitgegeven.`
-  );
-
+setIssueMessages((prev) => ({
+  ...prev,
+  [groupKey]: item.unique_number
+    ? `Kledingstuk ${item.unique_number} is succesvol uitgegeven.`
+    : "Kledingstuk is succesvol uitgegeven.",
+}));
   await loadMemberDetails(memberId);
   await loadDashboard();
 }
@@ -452,6 +606,7 @@ setMembers(memberRows);
     setTeamBagsWithShortage(uniqueBags.size);
 await loadInventoryItems();
 await loadArticleTypes();
+await loadSizes();
 await loadMemberTypeEntitlements();
   }
 
@@ -573,6 +728,82 @@ await loadMemberTypeEntitlements();
               </p>
             </div>
           </div>
+<div className="mt-8 rounded-2xl bg-white p-6 shadow">
+  <h2 className="text-lg font-bold text-gray-900">
+    Voorraad toevoegen
+  </h2>
+
+ <div className="mt-4 flex flex-wrap items-center gap-3">
+    <select
+      value={newStockArticleId ?? ""}
+      onChange={(e) =>
+        setNewStockArticleId(
+          e.target.value ? Number(e.target.value) : null
+        )
+      }
+      className="rounded-lg border border-gray-300 px-3 py-2"
+    >
+      <option value="">Kies kledingstuk</option>
+      {articleTypes.map((article) => (
+        <option key={article.id} value={article.id}>
+          {article.name}
+        </option>
+      ))}
+    </select>
+
+    <select
+      value={newStockSizeId ?? ""}
+      onChange={(e) =>
+        setNewStockSizeId(
+          e.target.value ? Number(e.target.value) : null
+        )
+      }
+      className="w-32 rounded-lg border border-gray-300 px-3 py-2"
+    >
+      <option value="">Kies maat</option>
+      {sizes.map((size) => (
+        <option key={size.id} value={size.id}>
+          {size.name}
+        </option>
+      ))}
+    </select>
+<input
+  type="text"
+  placeholder="Nummer"
+  value={newStockNumber}
+  onChange={(e) => setNewStockNumber(e.target.value)}
+  className="rounded-lg border border-gray-300 px-3 py-2"
+/>
+<label className="flex items-center gap-2 text-sm text-gray-600">
+  <input
+    type="checkbox"
+    checked={newStockWithoutNumber}
+    onChange={(e) => setNewStockWithoutNumber(e.target.checked)}
+  />
+  Geen nummer
+</label>
+{newStockWithoutNumber && (
+  <input
+    type="number"
+    min="1"
+    value={newStockQuantity}
+    onChange={(e) =>
+      setNewStockQuantity(
+        Math.max(1, Number(e.target.value))
+      )
+    }
+    className="w-24 rounded-lg border border-gray-300 px-3 py-2"
+  />
+)}
+<button
+  type="button"
+  onClick={addStockItem}
+  className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+>
+  Toevoegen
+</button>
+  </div>
+</div>
 <div className="mt-8 rounded-2xl bg-white p-6 shadow">
   <h2 className="text-lg font-bold text-gray-900">
     Voorraadoverzicht
@@ -838,20 +1069,84 @@ const groupMissing = Math.max(groupExpected - groupIssued, 0);
     ))}
   </select>
 )}
+<input
+  type="text"
+  placeholder="Nummer"
+  value={issueNumbers[groupKey] ?? ""}
+ onChange={(e) => {
+  const value = e.target.value;
+
+  setIssueNumbers((prev) => ({
+    ...prev,
+    [groupKey]: value,
+  }));
+
+  loadSizeForNumber(
+    groupKey,
+    item.choice_group === "tas"
+      ? selectedChoiceArticles[groupKey] ?? items[0].article_type_id
+      : item.article_type_id,
+    value
+  );
+}}
+  className="mb-2 block w-28 rounded-lg border border-gray-300 px-2 py-2 text-sm"
+/>
+<label className="mb-2 flex items-center gap-2 text-sm text-gray-600">
+  <input
+    type="checkbox"
+    checked={issueWithoutNumber[groupKey] ?? false}
+    onChange={(e) =>
+      setIssueWithoutNumber((prev) => ({
+        ...prev,
+        [groupKey]: e.target.checked,
+      }))
+    }
+  />
+  Geen nummer
+</label>
+{issueWithoutNumber[groupKey] && (
+  <select
+    value={issueSizes[groupKey] ?? ""}
+    onChange={(e) =>
+      setIssueSizes((prev) => ({
+        ...prev,
+        [groupKey]: Number(e.target.value),
+      }))
+    }
+    className="mb-2 block rounded-lg border border-gray-300 px-2 py-2 text-sm"
+  >
+    <option value="">Kies maat</option>
+    {sizes.map((size) => (
+      <option key={size.id} value={size.id}>
+        {size.name}
+      </option>
+    ))}
+  </select>
+)}
     <button
-      type="button"
- onClick={() =>
-  issueItem(
-  selectedMemberId,
-  item.choice_group === "tas"
-    ? selectedChoiceArticles[groupKey] ?? items[0].article_type_id
-    : item.article_type_id
-)
-}
+   type="button"
+  onClick={() =>
+    issueItem(
+      selectedMemberId,
+      item.choice_group === "tas"
+        ? selectedChoiceArticles[groupKey] ?? items[0].article_type_id
+        : item.article_type_id,
+      issueNumbers[groupKey] ?? "",
+      issueWithoutNumber[groupKey]
+        ? issueSizes[groupKey] ?? null
+        : null,
+      groupKey
+    )
+  }
       className="rounded-lg bg-gray-900 px-3 py-2 text-sm font-medium text-white hover:bg-gray-700"
     >
       Uitgeven
 </button>
+{issueMessages[groupKey] && (
+  <div className="mt-2 text-sm text-red-600">
+    {issueMessages[groupKey]}
+  </div>
+)}
   </>
 ) : (
     <span className="text-sm text-gray-400">Compleet</span>
