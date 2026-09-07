@@ -124,6 +124,9 @@ const [teamBagReturnDamaged, setTeamBagReturnDamaged] = useState<Record<number, 
 const [teamBagContents, setTeamBagContents] = useState<TeamBagContent[]>([]);
 const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
 const [activeSection, setActiveSection] = useState<string>("overzicht");
+const [itemSearchNumber, setItemSearchNumber] = useState("");
+const [itemSearchArticleId, setItemSearchArticleId] = useState<number | null>(null);
+const [itemSearchResult, setItemSearchResult] = useState<string>("");
 const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
 const [clothingDetails, setClothingDetails] = useState<ClothingStatus[]>([]);
 const [availableItems, setAvailableItems] = useState<IndividualItem[]>([]);
@@ -498,6 +501,82 @@ async function addMember() {
   setNewMemberPhone("");
 
   await loadDashboard();
+}
+async function searchItem() {
+  const searchNumber = itemSearchNumber.trim();
+
+  if (!searchNumber) {
+    setItemSearchResult("Vul eerst een itemnummer in.");
+    return;
+  }
+
+  setItemSearchResult("");
+
+  let query = supabase
+  .from("individual_items")
+  .select("id, article_type_id, size_id, unique_number, status, condition")
+  .eq("unique_number", searchNumber);
+
+if (itemSearchArticleId !== null) {
+  query = query.eq("article_type_id", itemSearchArticleId);
+}
+
+const { data: items, error: itemError } = await query;
+
+  if (itemError) {
+    setItemSearchResult("Item kon niet worden opgezocht.");
+    return;
+  }
+
+  if (!items || items.length === 0) {
+  setItemSearchResult("Geen kledingstuk gevonden met dit nummer.");
+  return;
+}
+const { data: assignments, error: assignmentError } = await supabase
+  .from("current_item_assignments")
+  .select("member_id, first_name, last_name, article, unique_number, size")
+  .eq("unique_number", searchNumber);
+
+if (assignmentError) {
+  setItemSearchResult("Uitgiftegegevens konden niet worden opgezocht.");
+  return;
+}
+
+const results = items.map((item) => {
+  const article = articleTypes.find(
+    (article) => article.id === item.article_type_id
+  );
+
+  const size = sizes.find(
+    (size) => size.id === item.size_id
+  );
+
+ const assignment = assignments?.find(
+  (assignment) =>
+    assignment.unique_number === searchNumber &&
+    assignment.article === article?.name
+);
+
+  if (assignment) {
+    const member = members.find(
+      (member) => member.member_id === assignment.member_id
+    );
+
+    const memberName = member
+      ? `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim()
+      : "Onbekende persoon";
+
+    return `${article?.name ?? "Onbekend kledingstuk"} | Maat: ${
+      size?.name ?? "-"
+    } | Uitgegeven aan: ${memberName}`;
+  }
+
+  return `${article?.name ?? "Onbekend kledingstuk"} | Maat: ${
+    size?.name ?? "-"
+  } | Niet uitgegeven`;
+});
+
+setItemSearchResult(results.join("\n"));
 }
 async function addStockItem() {
   setMessage("");
@@ -1045,6 +1124,56 @@ await loadMemberTypeEntitlements();
               </p>
             </div>
           </div>
+{activeSection === "overzicht" && (
+  <div className="mt-8 rounded-2xl bg-white p-6 shadow">
+    <h2 className="text-lg font-bold text-gray-900">
+      Item zoeken
+    </h2>
+
+    <p className="mt-2 text-sm text-gray-600">
+      Zoek op het nummer van een gevonden kledingstuk.
+    </p>
+
+    <div className="mt-4 flex flex-wrap items-center gap-3">
+<select
+  value={itemSearchArticleId ?? ""}
+  onChange={(e) =>
+    setItemSearchArticleId(
+      e.target.value ? Number(e.target.value) : null
+    )
+  }
+  className="rounded-lg border border-gray-300 px-3 py-2"
+>
+  <option value="">Alle artikelen</option>
+  {articleTypes.map((article) => (
+    <option key={article.id} value={article.id}>
+      {article.name}
+    </option>
+  ))}
+</select>   
+   <input
+        type="text"
+        placeholder="Itemnummer"
+        value={itemSearchNumber}
+        onChange={(e) => setItemSearchNumber(e.target.value)}
+        className="rounded-lg border border-gray-300 px-3 py-2"
+      />
+
+      <button
+        type="button"
+        onClick={searchItem}
+        className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+      >
+        Zoeken
+      </button>
+    </div>
+{itemSearchResult && (
+  <div className="mt-4 whitespace-pre-line rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
+    {itemSearchResult}
+  </div>
+)}
+  </div>
+)}
 {activeSection === "voorraad" && (
 <div className="mt-8 rounded-2xl bg-white p-6 shadow">
   <h2 className="text-lg font-bold text-gray-900">
