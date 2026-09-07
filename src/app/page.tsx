@@ -118,8 +118,12 @@ const [teamBagHolderLastName, setTeamBagHolderLastName] = useState("");
 const [teamBagHolderMail, setTeamBagHolderMail] = useState("");
 const [teamBagHolderPhone, setTeamBagHolderPhone] = useState("");
 const [teamBagIssueMessage, setTeamBagIssueMessage] = useState("");
+const [teamBagReturnMessage, setTeamBagReturnMessage] = useState("");
+const [teamBagReturnActual, setTeamBagReturnActual] = useState<Record<number, number>>({});
+const [teamBagReturnDamaged, setTeamBagReturnDamaged] = useState<Record<number, number>>({});
 const [teamBagContents, setTeamBagContents] = useState<TeamBagContent[]>([]);
 const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+const [activeSection, setActiveSection] = useState<string>("overzicht");
 const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
 const [clothingDetails, setClothingDetails] = useState<ClothingStatus[]>([]);
 const [availableItems, setAvailableItems] = useState<IndividualItem[]>([]);
@@ -355,6 +359,103 @@ holder_last_name: teamBagHolderLastName.trim() || null,
 setTeamBagHolderLastName("");
   setTeamBagHolderMail("");
   setTeamBagHolderPhone("");
+
+  await loadDashboard();
+}
+async function returnTeamBag() {
+  setTeamBagReturnMessage("");
+
+  if (selectedTeamBagId === null) {
+    setTeamBagReturnMessage("Kies eerst een teamtas.");
+    return;
+  }
+
+  const contents = teamBagContents.filter(
+    (item) => item.team_bag_id === selectedTeamBagId
+  );
+
+  for (const item of contents) {
+    const actualQuantity =
+      teamBagReturnActual[item.id] ?? item.actual_quantity;
+
+    const damagedQuantity =
+      teamBagReturnDamaged[item.id] ?? item.damaged_quantity;
+
+    if (
+      actualQuantity < 0 ||
+      damagedQuantity < 0 ||
+      damagedQuantity > actualQuantity
+    ) {
+      setTeamBagReturnMessage(
+        "Controleer de aantallen. Beschadigd kan niet hoger zijn dan aanwezig."
+      );
+      return;
+    }
+
+    const { error } = await supabase
+      .from("team_bag_contents")
+      .update({
+        actual_quantity: actualQuantity,
+        damaged_quantity: damagedQuantity,
+      })
+      .eq("id", item.id);
+
+    if (error) {
+      setTeamBagReturnMessage(
+        "Inhoud van de teamtas kon niet worden opgeslagen: " +
+          error.message
+      );
+      return;
+    }
+  }
+const selectedBag = teamBags.find(
+  (bag) => bag.id === selectedTeamBagId
+);
+
+if (!selectedBag) {
+  setTeamBagReturnMessage("Teamtas kon niet worden gevonden.");
+  return;
+}
+
+const returnedAt = new Date().toISOString();
+
+const { error: historyError } = await supabase
+  .from("team_bag_history")
+  .insert({
+    team_bag_id: selectedBag.id,
+    holder_name: selectedBag.holder_name,
+    holder_last_name: selectedBag.holder_last_name,
+    holder_mail: selectedBag.holder_mail,
+    holder_phone: selectedBag.holder_phone,
+    issued_at: selectedBag.issued_at,
+    returned_at: returnedAt,
+    status: "returned",
+    notes: null,
+  });
+
+if (historyError) {
+  setTeamBagReturnMessage(
+    "Historie kon niet worden opgeslagen: " +
+      historyError.message
+  );
+  return;
+}
+  const { error: bagError } = await supabase
+    .from("team_bags")
+    .update({
+      status: "returned",
+   returned_at: returnedAt,
+    })
+    .eq("id", selectedTeamBagId);
+
+  if (bagError) {
+    setTeamBagReturnMessage(
+      "Teamtas kon niet worden ingenomen: " + bagError.message
+    );
+    return;
+  }
+
+  setTeamBagReturnMessage("Teamtas is succesvol ingenomen.");
 
   await loadDashboard();
 }
@@ -811,6 +912,55 @@ await loadMemberTypeEntitlements();
             <p className="mt-2 text-gray-600">
               Dashboard voetbalvereniging
             </p>
+<div className="mt-4 flex flex-wrap gap-2">
+  <button
+    type="button"
+    onClick={() => setActiveSection("overzicht")}
+    className={`rounded-lg px-4 py-2 text-sm font-medium ${
+      activeSection === "overzicht"
+        ? "bg-gray-900 text-white"
+        : "bg-white text-gray-700 border border-gray-300"
+    }`}
+  >
+    Overzicht
+  </button>
+
+  <button
+    type="button"
+    onClick={() => setActiveSection("personen")}
+    className={`rounded-lg px-4 py-2 text-sm font-medium ${
+      activeSection === "personen"
+        ? "bg-gray-900 text-white"
+        : "bg-white text-gray-700 border border-gray-300"
+    }`}
+  >
+    Personen & kleding
+  </button>
+
+  <button
+    type="button"
+    onClick={() => setActiveSection("voorraad")}
+    className={`rounded-lg px-4 py-2 text-sm font-medium ${
+      activeSection === "voorraad"
+        ? "bg-gray-900 text-white"
+        : "bg-white text-gray-700 border border-gray-300"
+    }`}
+  >
+    Voorraad
+  </button>
+
+  <button
+    type="button"
+    onClick={() => setActiveSection("teamtassen")}
+    className={`rounded-lg px-4 py-2 text-sm font-medium ${
+      activeSection === "teamtassen"
+        ? "bg-gray-900 text-white"
+        : "bg-white text-gray-700 border border-gray-300"
+    }`}
+  >
+    Teamtassen
+  </button>
+</div>
           </div>
 
           {message && (
@@ -895,6 +1045,7 @@ await loadMemberTypeEntitlements();
               </p>
             </div>
           </div>
+{activeSection === "voorraad" && (
 <div className="mt-8 rounded-2xl bg-white p-6 shadow">
   <h2 className="text-lg font-bold text-gray-900">
     Voorraad toevoegen
@@ -971,6 +1122,8 @@ await loadMemberTypeEntitlements();
 </button>
   </div>
 </div>
+)}
+{activeSection === "voorraad" && (
 <div className="mt-8 rounded-2xl bg-white p-6 shadow">
   <h2 className="text-lg font-bold text-gray-900">
     Voorraadoverzicht
@@ -1033,6 +1186,8 @@ await loadMemberTypeEntitlements();
   </table>
 </div>
 </div>
+)}
+{activeSection === "teamtassen" && (
 <div className="mt-8 overflow-hidden rounded-2xl bg-white shadow">
   <div className="border-b border-gray-200 px-6 py-4">
     <h2 className="text-xl font-bold text-gray-900">
@@ -1060,7 +1215,27 @@ await loadMemberTypeEntitlements();
         {teamBags.map((bag) => (
       <tr
   key={bag.id}
-  onClick={() => setSelectedTeamBagId(bag.id)}
+  onClick={() => {
+  setSelectedTeamBagId(bag.id);
+
+  const contents = teamBagContents.filter(
+    (item) => item.team_bag_id === bag.id
+  );
+
+  setTeamBagReturnActual(
+    Object.fromEntries(
+      contents.map((item) => [item.id, item.actual_quantity])
+    )
+  );
+
+  setTeamBagReturnDamaged(
+    Object.fromEntries(
+      contents.map((item) => [item.id, item.damaged_quantity])
+    )
+  );
+
+  setTeamBagReturnMessage("");
+}}
   className="cursor-pointer border-b border-gray-100 hover:bg-gray-50"
 >
             <td className="px-6 py-4 text-gray-900">
@@ -1072,7 +1247,11 @@ await loadMemberTypeEntitlements();
             </td>
 
             <td className="px-6 py-4 text-gray-600">
-              {bag.status}
+              {bag.status === "issued"
+  ? "Uitgegeven"
+  : bag.status === "returned"
+  ? "Ingenomen"
+  : bag.status}
             </td>
           </tr>
         ))}
@@ -1130,6 +1309,14 @@ await loadMemberTypeEntitlements();
           ? new Date(selectedBag.issued_at).toLocaleDateString("nl-NL")
           : "-"}
       </div>
+{selectedBag.returned_at && (
+  <div>
+    <span className="font-medium text-gray-900">
+      Ingenomen op:
+    </span>{" "}
+    {new Date(selectedBag.returned_at).toLocaleDateString("nl-NL")}
+  </div>
+)}
     </div>
   );
 })()}
@@ -1184,13 +1371,35 @@ await loadMemberTypeEntitlements();
                 {item.expected_quantity}
               </td>
 
-              <td className="px-4 py-3 text-gray-600">
-                {item.actual_quantity}
-              </td>
+             <td className="px-4 py-3 text-gray-600">
+  <input
+    type="number"
+    min="0"
+    value={teamBagReturnActual[item.id] ?? item.actual_quantity}
+    onChange={(e) =>
+      setTeamBagReturnActual((current) => ({
+        ...current,
+        [item.id]: Number(e.target.value),
+      }))
+    }
+    className="w-20 rounded-lg border border-gray-300 px-2 py-1"
+  />
+</td>
 
-              <td className="px-4 py-3 text-gray-600">
-                {item.damaged_quantity}
-              </td>
+             <td className="px-4 py-3 text-gray-600">
+  <input
+    type="number"
+    min="0"
+    value={teamBagReturnDamaged[item.id] ?? item.damaged_quantity}
+    onChange={(e) =>
+      setTeamBagReturnDamaged((current) => ({
+        ...current,
+        [item.id]: Number(e.target.value),
+      }))
+    }
+    className="w-20 rounded-lg border border-gray-300 px-2 py-1"
+  />
+</td>
             </tr>
           );
         })}
@@ -1242,15 +1451,44 @@ await loadMemberTypeEntitlements();
       Tas uitgeven
     </button>
 {teamBagIssueMessage && (
-  <div className="w-full text-sm text-red-600">
+<div
+  className={`w-full text-sm ${
+    teamBagIssueMessage.includes("succesvol")
+      ? "text-green-600"
+      : "text-red-600"
+  }`}
+>
     {teamBagIssueMessage}
   </div>
 )}
+<div className="mt-4 w-full border-t border-gray-200 pt-4">
+  <button
+    type="button"
+    onClick={returnTeamBag}
+    className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+  >
+    Tas innemen
+  </button>
+
+  {teamBagReturnMessage && (
+  <div
+  className={`mt-2 text-sm ${
+    teamBagReturnMessage.includes("succesvol")
+      ? "text-green-600"
+      : "text-red-600"
+  }`}
+>
+      {teamBagReturnMessage}
+    </div>
+  )}
+</div>
   </div>
 </div>
  </div>
 )}
 </div>
+)}
+{activeSection === "personen" && (<>
 <div className="mt-8 rounded-2xl bg-white p-6 shadow">
   <h2 className="text-lg font-bold text-gray-900">
     Persoon toevoegen
@@ -1602,7 +1840,13 @@ const groupMissing = Math.max(groupExpected - groupIssued, 0);
       Uitgeven
 </button>
 {issueMessages[groupKey] && (
-  <div className="mt-2 text-sm text-red-600">
+<div
+  className={`mt-2 text-sm ${
+    issueMessages[groupKey]?.includes("succesvol")
+      ? "text-green-600"
+      : "text-red-600"
+  }`}
+>
     {issueMessages[groupKey]}
   </div>
 )}
@@ -1619,6 +1863,7 @@ const groupMissing = Math.max(groupExpected - groupIssued, 0);
     </div>
   </div>
 )}
+</>)}
         </div>
       </main>
     );
