@@ -8,6 +8,8 @@ type MemberSummary = {
   first_name: string | null;
   last_name: string | null;
   member_type: string | null;
+email: string | null;
+phone: string | null;
   expected_total: number | string | null;
   issued_total: number | string | null;
   missing_total: number | string | null;
@@ -74,6 +76,11 @@ export default function Home() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
+const [newMemberFirstName, setNewMemberFirstName] = useState("");
+const [newMemberLastName, setNewMemberLastName] = useState("");
+const [newMemberTypeId, setNewMemberTypeId] = useState<number | null>(null);
+const [newMemberEmail, setNewMemberEmail] = useState("");
+const [newMemberPhone, setNewMemberPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
   const [memberCount, setMemberCount] = useState(0);
@@ -275,6 +282,46 @@ async function loadArticleTypes() {
   }
 
   setArticleTypes((data ?? []) as ArticleType[]);
+}
+async function addMember() {
+  setMessage("");
+
+  if (
+    !newMemberFirstName.trim() ||
+    !newMemberLastName.trim() ||
+    newMemberTypeId === null
+  ) {
+    setMessage("Vul voornaam, achternaam en type persoon in.");
+    return;
+  }
+
+  const { error } = await supabase
+    .from("members")
+    .insert([
+      {
+        first_name: newMemberFirstName.trim(),
+        last_name: newMemberLastName.trim(),
+        member_type_id: newMemberTypeId,
+        email: newMemberEmail.trim() || null,
+        phone: newMemberPhone.trim() || null,
+        active: true,
+      },
+    ]);
+
+  if (error) {
+    setMessage("Persoon kon niet worden toegevoegd: " + error.message);
+    return;
+  }
+
+  setMessage("Persoon is succesvol toegevoegd.");
+
+  setNewMemberFirstName("");
+  setNewMemberLastName("");
+  setNewMemberTypeId(null);
+  setNewMemberEmail("");
+  setNewMemberPhone("");
+
+  await loadDashboard();
 }
 async function addStockItem() {
   setMessage("");
@@ -550,7 +597,10 @@ async function loadDashboard() {
   .select(
     "member_id, first_name, last_name, member_type, expected_total, issued_total, missing_total, clothing_status"
   );
-
+const { data: memberContactData, error: memberContactError } =
+  await supabase
+    .from("members")
+    .select("id, email, phone");
     if (membersError) {
       setMessage(
         "Kledinggegevens konden niet worden geladen: " +
@@ -559,7 +609,17 @@ async function loadDashboard() {
       return;
     }
 
-    const memberRows = (memberData ?? []) as MemberSummary[];
+    const memberRows = ((memberData ?? []) as MemberSummary[]).map((member) => {
+  const contact = memberContactData?.find(
+    (item) => item.id === member.member_id
+  );
+
+  return {
+    ...member,
+    email: contact?.email ?? null,
+    phone: contact?.phone ?? null,
+  };
+});
 
 setMembers(memberRows);
 
@@ -866,6 +926,68 @@ await loadMemberTypeEntitlements();
   </table>
 </div>
 </div>
+<div className="mt-8 rounded-2xl bg-white p-6 shadow">
+  <h2 className="text-lg font-bold text-gray-900">
+    Persoon toevoegen
+  </h2>
+
+  <div className="mt-4 flex flex-wrap items-center gap-3">
+    <input
+      type="text"
+      placeholder="Voornaam"
+      value={newMemberFirstName}
+      onChange={(e) => setNewMemberFirstName(e.target.value)}
+      className="rounded-lg border border-gray-300 px-3 py-2"
+    />
+
+    <input
+      type="text"
+      placeholder="Achternaam"
+      value={newMemberLastName}
+      onChange={(e) => setNewMemberLastName(e.target.value)}
+      className="rounded-lg border border-gray-300 px-3 py-2"
+    />
+
+    <select
+      value={newMemberTypeId ?? ""}
+      onChange={(e) =>
+        setNewMemberTypeId(
+          e.target.value ? Number(e.target.value) : null
+        )
+      }
+      className="rounded-lg border border-gray-300 px-3 py-2"
+    >
+      <option value="">Kies type</option>
+      <option value="1">Speler</option>
+      <option value="2">Selectiespeler</option>
+      <option value="3">Trainer</option>
+    </select>
+
+    <input
+      type="email"
+      placeholder="E-mailadres"
+      value={newMemberEmail}
+      onChange={(e) => setNewMemberEmail(e.target.value)}
+      className="rounded-lg border border-gray-300 px-3 py-2"
+    />
+
+    <input
+      type="tel"
+      placeholder="Telefoonnummer"
+      value={newMemberPhone}
+      onChange={(e) => setNewMemberPhone(e.target.value)}
+      className="rounded-lg border border-gray-300 px-3 py-2"
+    />
+
+    <button
+      type="button"
+      onClick={addMember}
+      className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+    >
+      Toevoegen
+    </button>
+  </div>
+</div>
 <div className="mt-8 overflow-hidden rounded-2xl bg-white shadow">
   <div className="border-b border-gray-200 px-6 py-4">
     <h2 className="text-xl font-bold text-gray-900">
@@ -883,6 +1005,12 @@ await loadMemberTypeEntitlements();
           <th className="px-6 py-3 text-sm font-medium text-gray-600">
             Type
           </th>
+<th className="px-6 py-3 text-sm font-medium text-gray-600">
+  E-mail
+</th>
+<th className="px-6 py-3 text-sm font-medium text-gray-600">
+  Telefoon
+</th>
           <th className="px-6 py-3 text-sm font-medium text-gray-600">
             Verwacht
           </th>
@@ -912,7 +1040,13 @@ await loadMemberTypeEntitlements();
             <td className="px-6 py-4 text-gray-600">
               {member.member_type ?? "-"}
             </td>
+<td className="px-6 py-4 text-gray-600">
+  {member.email ?? "-"}
+</td>
 
+<td className="px-6 py-4 text-gray-600">
+  {member.phone ?? "-"}
+</td>
             <td className="px-6 py-4 text-gray-600">
               {member.expected_total ?? 0}
             </td>
