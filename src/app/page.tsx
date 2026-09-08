@@ -1050,7 +1050,10 @@ await loadMemberTypeEntitlements();
 <div className="mb-8 grid gap-4 md:grid-cols-3">
   <button
     type="button"
-    onClick={() => setSelectedGroup("Trainer")}
+   onClick={() => {
+  setSelectedGroup("Trainer");
+  setActiveSection("personen");
+}}
     className="rounded-2xl bg-white p-6 text-left shadow hover:bg-gray-50"
   >
     <p className="text-lg font-bold text-gray-900">
@@ -1063,7 +1066,10 @@ await loadMemberTypeEntitlements();
 
   <button
     type="button"
-    onClick={() => setSelectedGroup("Speler")}
+  onClick={() => {
+  setSelectedGroup("Speler");
+  setActiveSection("personen");
+}}
     className="rounded-2xl bg-white p-6 text-left shadow hover:bg-gray-50"
   >
     <p className="text-lg font-bold text-gray-900">
@@ -1076,7 +1082,10 @@ await loadMemberTypeEntitlements();
 
   <button
     type="button"
-    onClick={() => setSelectedGroup("Selectiespeler")}
+    onClick={() => {
+  setSelectedGroup("Selectiespeler");
+  setActiveSection("personen");
+}}
     className="rounded-2xl bg-white p-6 text-left shadow hover:bg-gray-50"
   >
     <p className="text-lg font-bold text-gray-900">
