@@ -33,6 +33,18 @@ type IndividualItem = {
   status: string;
   condition: string;
 };
+type FoundItem = {
+  id: number;
+  individual_item_id: number;
+  member_id: number | null;
+  part: string | null;
+  found_date: string;
+  found_location: string | null;
+  note: string | null;
+  status: string;
+  returned_at: string | null;
+  notification_sent_at: string | null;
+};
 type Size = {
   id: number;
   name: string;
@@ -127,6 +139,15 @@ const [activeSection, setActiveSection] = useState<string>("overzicht");
 const [itemSearchNumber, setItemSearchNumber] = useState("");
 const [itemSearchArticleId, setItemSearchArticleId] = useState<number | null>(null);
 const [itemSearchResult, setItemSearchResult] = useState<string>("");
+const [foundItemId, setFoundItemId] = useState<number | null>(null);
+const [foundItemMemberId, setFoundItemMemberId] = useState<number | null>(null);
+const [foundItemPart, setFoundItemPart] = useState("");
+const [foundItemArticleName, setFoundItemArticleName] = useState("");
+const [foundItemLocation, setFoundItemLocation] = useState("");
+const [foundItemNote, setFoundItemNote] = useState("");
+const [foundItemMessage, setFoundItemMessage] = useState("");
+const [foundItems, setFoundItems] = useState<FoundItem[]>([]);
+const [showFoundItemForm, setShowFoundItemForm] = useState(false);
 const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
 const [clothingDetails, setClothingDetails] = useState<ClothingStatus[]>([]);
 const [availableItems, setAvailableItems] = useState<IndividualItem[]>([]);
@@ -140,12 +161,16 @@ const memberTypeIds: Record<string, number> = {
   Selectiespeler: 2,
   Trainer: 3,
 };
-const selectedGroupEntitlements = selectedGroup
-  ? memberTypeEntitlements.filter(
-      (entitlement) =>
-        entitlement.member_type_id === memberTypeIds[selectedGroup]
-    )
-  : memberTypeEntitlements;
+const selectedGroupEntitlements = (
+  selectedGroup
+    ? memberTypeEntitlements.filter(
+        (entitlement) =>
+          entitlement.member_type_id === memberTypeIds[selectedGroup]
+      )
+    : memberTypeEntitlements
+).sort(
+  (a, b) => (a.sort_order ?? 999) - (b.sort_order ?? 999)
+);
 const selectedGroupArticleTypeIds = selectedGroupEntitlements.map(
   (entitlement) => entitlement.article_type_id
 );
@@ -157,18 +182,38 @@ const filteredInventoryItems = selectedGroup
 const filteredMembers = selectedGroup
   ? members.filter((member) => member.member_type === selectedGroup)
   : members;
-const groupedClothingDetails = clothingDetails.reduce<
-  Record<string, ClothingStatus[]>
->((groups, item) => {
-  const key = item.choice_group ?? `article-${item.article_type_id}`;
+const selectedMemberFoundItems =
+  selectedMemberId !== null
+    ? foundItems.filter(
+        (foundItem) => foundItem.member_id === selectedMemberId
+      )
+    : [];
+const groupedClothingDetails = [...clothingDetails]
+  .sort((a, b) => {
+    const aOrder =
+      selectedGroupEntitlements.find(
+        (entitlement) =>
+          entitlement.article_type_id === a.article_type_id
+      )?.sort_order ?? 999;
 
-  if (!groups[key]) {
-    groups[key] = [];
-  }
+    const bOrder =
+      selectedGroupEntitlements.find(
+        (entitlement) =>
+          entitlement.article_type_id === b.article_type_id
+      )?.sort_order ?? 999;
 
-  groups[key].push(item);
-  return groups;
-}, {});
+    return aOrder - bOrder;
+  })
+  .reduce<Record<string, ClothingStatus[]>>((groups, item) => {
+    const key = item.choice_group ?? `article-${item.article_type_id}`;
+
+    if (!groups[key]) {
+      groups[key] = [];
+    }
+
+    groups[key].push(item);
+    return groups;
+  }, {});
 const selectedGroupIssuedTotal = filteredMembers.reduce(
   (total, member) => total + Number(member.issued_total ?? 0),
   0
@@ -511,6 +556,9 @@ async function searchItem() {
   }
 
   setItemSearchResult("");
+setFoundItemId(null);
+setFoundItemMemberId(null);
+setFoundItemPart("");
 
   let query = supabase
   .from("individual_items")
@@ -540,6 +588,23 @@ const { data: assignments, error: assignmentError } = await supabase
 if (assignmentError) {
   setItemSearchResult("Uitgiftegegevens konden niet worden opgezocht.");
   return;
+}
+if (items.length === 1) {
+  const foundItem = items[0];
+
+  const foundArticle = articleTypes.find(
+    (article) => article.id === foundItem.article_type_id
+  );
+setFoundItemArticleName(foundArticle?.name ?? "");
+
+  const foundAssignment = assignments?.find(
+    (assignment) =>
+      assignment.unique_number === searchNumber &&
+      assignment.article === foundArticle?.name
+  );
+
+  setFoundItemId(foundItem.id);
+  setFoundItemMemberId(foundAssignment?.member_id ?? null);
 }
 
 const results = items.map((item) => {
@@ -577,6 +642,62 @@ const results = items.map((item) => {
 });
 
 setItemSearchResult(results.join("\n"));
+}
+async function registerFoundItem() {
+  if (foundItemId === null) {
+    setFoundItemMessage("Er is geen kledingstuk geselecteerd.");
+    return;
+  }
+
+  if (
+    foundItemArticleName === "Presentatiepak" &&
+    !foundItemPart
+  ) {
+    setFoundItemMessage("Kies eerst Jack of Broek.");
+    return;
+  }
+
+  setFoundItemMessage("");
+
+  const { error } = await supabase
+    .from("found_items")
+    .insert({
+      individual_item_id: foundItemId,
+      member_id: foundItemMemberId,
+      part: foundItemPart || null,
+      note: foundItemNote.trim() || null,
+    });
+
+  if (error) {
+    setFoundItemMessage(
+      "Gevonden voorwerp kon niet worden geregistreerd: " + error.message
+    );
+    return;
+  }
+
+  setFoundItemMessage("Gevonden voorwerp is geregistreerd.");
+  setFoundItemNote("");
+  setFoundItemPart("");
+  setShowFoundItemForm(false);
+}
+async function markFoundItemReturned(foundItemId: number) {
+  const { error } = await supabase
+    .from("found_items")
+    .update({
+      status: "teruggegeven",
+      returned_at: new Date().toISOString(),
+    })
+    .eq("id", foundItemId);
+
+  if (error) {
+    setMessage(
+      "Gevonden voorwerp kon niet als teruggegeven worden gemarkeerd: " +
+        error.message
+    );
+    return;
+  }
+
+  await loadDashboard();
 }
 async function addStockItem() {
   setMessage("");
@@ -843,7 +964,36 @@ async function loadMemberDetails(memberId: number) {
   }
 
   setSelectedMemberId(memberId);
-  setClothingDetails((data ?? []) as ClothingStatus[]);
+const selectedMember = members.find(
+  (member) => member.member_id === memberId
+);
+
+const selectedMemberTypeId =
+  selectedMember?.member_type
+    ? memberTypeIds[selectedMember.member_type]
+    : undefined;
+
+const sortedClothingDetails = ((data ?? []) as ClothingStatus[]).sort(
+  (a, b) => {
+    const aOrder =
+      memberTypeEntitlements.find(
+        (entitlement) =>
+          entitlement.member_type_id === selectedMemberTypeId &&
+          entitlement.article_type_id === a.article_type_id
+      )?.sort_order ?? 999;
+
+    const bOrder =
+      memberTypeEntitlements.find(
+        (entitlement) =>
+          entitlement.member_type_id === selectedMemberTypeId &&
+          entitlement.article_type_id === b.article_type_id
+      )?.sort_order ?? 999;
+
+    return aOrder - bOrder;
+  }
+);
+
+setClothingDetails(sortedClothingDetails);
 await loadCurrentAssignments(memberId);
 }  
 async function loadDashboard() {
@@ -951,6 +1101,23 @@ setTeamBagContents(
     );
 
     setTeamBagsWithShortage(uniqueBags.size);
+const { data: foundItemData, error: foundItemError } = await supabase
+  .from("found_items")
+  .select(
+    "id, individual_item_id, member_id, part, found_date, found_location, note, status, returned_at, notification_sent_at"
+  )
+  .eq("status", "gevonden")
+  .order("found_date", { ascending: false });
+
+if (foundItemError) {
+  setMessage(
+    "Gevonden voorwerpen konden niet worden geladen: " +
+      foundItemError.message
+  );
+  return;
+}
+
+setFoundItems((foundItemData ?? []) as FoundItem[]);
 await loadInventoryItems();
 await loadArticleTypes();
 await loadSizes();
@@ -1006,7 +1173,10 @@ await loadMemberTypeEntitlements();
 
   <button
     type="button"
-    onClick={() => setActiveSection("personen")}
+  onClick={() => {
+  setSelectedGroup(null);
+  setActiveSection("personen");
+}}
     className={`rounded-lg px-4 py-2 text-sm font-medium ${
       activeSection === "personen"
         ? "bg-gray-900 text-white"
@@ -1179,6 +1349,59 @@ await loadMemberTypeEntitlements();
 {itemSearchResult && (
   <div className="mt-4 whitespace-pre-line rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
     {itemSearchResult}
+  </div>
+)}
+{foundItemId !== null && (
+  <button
+    type="button"
+onClick={() => setShowFoundItemForm(true)}
+    className="mt-4 rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+  >
+    Als gevonden registreren
+  </button>
+)}
+{showFoundItemForm && foundItemId !== null && (
+  <div className="mt-4 rounded-lg border border-gray-200 p-4">
+    <h3 className="font-semibold">Gevonden voorwerp registreren</h3>
+{foundItemArticleName === "Presentatiepak" && (
+  <div className="mt-3">
+    <label className="mb-1 block text-sm font-medium">
+      Onderdeel
+    </label>
+    <select
+      value={foundItemPart}
+      onChange={(e) => setFoundItemPart(e.target.value)}
+      className="w-full rounded-lg border border-gray-300 px-3 py-2"
+    >
+      <option value="">Kies onderdeel</option>
+      <option value="Jack">Jack</option>
+      <option value="Broek">Broek</option>
+    </select>
+  </div>
+)}
+  {foundItemMessage && (
+  <div className="mt-4 rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
+    {foundItemMessage}
+  </div>
+)}
+    <div className="mt-3">
+      <label className="mb-1 block text-sm font-medium">
+        Notitie
+      </label>
+      <textarea
+        value={foundItemNote}
+        onChange={(e) => setFoundItemNote(e.target.value)}
+        placeholder="Eventuele bijzonderheden"
+        className="w-full rounded-lg border border-gray-300 px-3 py-2"
+      />
+    </div>
+<button
+  type="button"
+onClick={registerFoundItem}
+  className="mt-4 rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+>
+  Registreren
+</button>
   </div>
 )}
   </div>
@@ -1780,7 +2003,46 @@ await loadMemberTypeEntitlements();
     ?.last_name}
 </h2>
     </div>
+{selectedMemberFoundItems.length > 0 && (
+  <div className="border-b border-gray-200 bg-yellow-50 px-6 py-4">
+    <p className="font-semibold text-yellow-800">
+      Gevonden kleding
+    </p>
 
+    {selectedMemberFoundItems.map((foundItem) => {
+      const assignment = currentAssignments.find(
+        (assignment) =>
+          assignment.member_id === selectedMemberId &&
+          foundItem.individual_item_id ===
+            inventoryItems.find(
+              (item) => item.unique_number === assignment.unique_number
+            )?.id
+      );
+
+      return (
+        <div key={foundItem.id} className="mt-2 text-sm text-yellow-800">
+          <p>
+            {assignment?.article ?? "Kledingstuk"} — nummer{" "}
+            {assignment?.unique_number ?? "-"}
+          </p>
+
+          {foundItem.note && (
+            <p className="mt-1">
+              Notitie: {foundItem.note}
+            </p>
+          )}
+<button
+  type="button"
+  onClick={() => markFoundItemReturned(foundItem.id)}
+  className="mt-3 rounded-lg border border-yellow-700 px-3 py-1.5 text-sm font-medium text-yellow-800 hover:bg-yellow-100"
+>
+  Teruggegeven
+</button>
+        </div>
+      );
+    })}
+  </div>
+)}
     <div className="overflow-x-auto">
 {currentAssignments.length > 0 && (
   <div className="border-b border-gray-200 px-6 py-4">
@@ -1850,7 +2112,9 @@ await loadMemberTypeEntitlements();
         </thead>
 
         <tbody>
-          {Object.entries(groupedClothingDetails).map(([groupKey, items]) => {
+      {Object.entries(groupedClothingDetails)
+
+  .map(([groupKey, items]) => {
   const item = items[0];
 const groupExpected = Math.max(
   ...items.map((groupItem) => Number(groupItem.expected_quantity ?? 0))
