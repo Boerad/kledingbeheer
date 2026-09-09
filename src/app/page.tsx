@@ -146,6 +146,8 @@ const [foundItemArticleName, setFoundItemArticleName] = useState("");
 const [foundItemLocation, setFoundItemLocation] = useState("");
 const [foundItemNote, setFoundItemNote] = useState("");
 const [foundItemMessage, setFoundItemMessage] = useState("");
+const [foundItemMessageType, setFoundItemMessageType] =
+  useState<"success" | "error">("success");
 const [foundItems, setFoundItems] = useState<FoundItem[]>([]);
 const [showFoundItemForm, setShowFoundItemForm] = useState(false);
 const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
@@ -556,6 +558,7 @@ async function searchItem() {
   }
 
   setItemSearchResult("");
+setFoundItemMessage("");
 setFoundItemId(null);
 setFoundItemMemberId(null);
 setFoundItemPart("");
@@ -658,7 +661,28 @@ async function registerFoundItem() {
   }
 
   setFoundItemMessage("");
+const { data: existingFoundItems, error: existingFoundItemError } =
+  await supabase
+    .from("found_items")
+    .select("id")
+    .eq("individual_item_id", foundItemId)
+    .eq("status", "gevonden");
 
+if (existingFoundItemError) {
+  setFoundItemMessage(
+    "Controle op bestaande registratie mislukt: " +
+      existingFoundItemError.message
+  );
+  return;
+}
+
+if ((existingFoundItems ?? []).length > 0) {
+setFoundItemMessageType("error");
+  setFoundItemMessage(
+    "Dit kledingstuk staat al als gevonden geregistreerd."
+  );
+  return;
+}
   const { error } = await supabase
     .from("found_items")
     .insert({
@@ -674,7 +698,7 @@ async function registerFoundItem() {
     );
     return;
   }
-
+setFoundItemMessageType("success");
   setFoundItemMessage("Gevonden voorwerp is geregistreerd.");
   setFoundItemNote("");
   setFoundItemPart("");
@@ -1360,6 +1384,17 @@ onClick={() => setShowFoundItemForm(true)}
     Als gevonden registreren
   </button>
 )}
+ {foundItemMessage && (
+  <div
+    className={`mt-4 rounded-lg p-3 text-sm font-medium ${
+      foundItemMessageType === "error"
+        ? "bg-red-50 text-red-700"
+        : "bg-green-50 text-green-700"
+    }`}
+  >
+    {foundItemMessage}
+  </div>
+)}
 {showFoundItemForm && foundItemId !== null && (
   <div className="mt-4 rounded-lg border border-gray-200 p-4">
     <h3 className="font-semibold">Gevonden voorwerp registreren</h3>
@@ -1379,11 +1414,7 @@ onClick={() => setShowFoundItemForm(true)}
     </select>
   </div>
 )}
-  {foundItemMessage && (
-  <div className="mt-4 rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
-    {foundItemMessage}
-  </div>
-)}
+ 
     <div className="mt-3">
       <label className="mb-1 block text-sm font-medium">
         Notitie
