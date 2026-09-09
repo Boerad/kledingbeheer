@@ -150,6 +150,7 @@ const [foundItemMessageType, setFoundItemMessageType] =
   useState<"success" | "error">("success");
 const [foundItems, setFoundItems] = useState<FoundItem[]>([]);
 const [showFoundItemForm, setShowFoundItemForm] = useState(false);
+const [memberSearch, setMemberSearch] = useState("");
 const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
 const [clothingDetails, setClothingDetails] = useState<ClothingStatus[]>([]);
 const [availableItems, setAvailableItems] = useState<IndividualItem[]>([]);
@@ -181,9 +182,20 @@ const filteredInventoryItems = selectedGroup
       selectedGroupArticleTypeIds.includes(item.article_type_id)
     )
   : inventoryItems;
-const filteredMembers = selectedGroup
-  ? members.filter((member) => member.member_type === selectedGroup)
-  : members;
+const filteredMembers = members.filter((member) => {
+  const matchesGroup =
+    selectedGroup === null || member.member_type === selectedGroup;
+
+  const fullName = `${member.first_name ?? ""} ${member.last_name ?? ""}`
+    .toLowerCase()
+    .trim();
+
+  const matchesSearch =
+    memberSearch.trim() === "" ||
+    fullName.includes(memberSearch.toLowerCase().trim());
+
+  return matchesGroup && matchesSearch;
+});
 const selectedMemberFoundItems =
   selectedMemberId !== null
     ? foundItems.filter(
@@ -1949,7 +1961,15 @@ onClick={registerFoundItem}
       Personen
     </h2>
   </div>
-
+<div className="border-b border-gray-200 px-6 py-4">
+  <input
+    type="text"
+    value={memberSearch}
+    onChange={(e) => setMemberSearch(e.target.value)}
+    placeholder="Zoek op voor- of achternaam"
+    className="w-full max-w-md rounded-lg border border-gray-300 px-4 py-2 text-sm"
+  />
+</div>
   <div className="overflow-x-auto">
     <table className="w-full text-left">
       <thead className="bg-gray-50">
