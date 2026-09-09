@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type MemberSummary = {
@@ -110,6 +110,8 @@ type TeamBagContent = {
 export default function Home() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+const [resetMode, setResetMode] = useState(false);
+const [newPassword, setNewPassword] = useState("");
   const [message, setMessage] = useState("");
 const [newMemberFirstName, setNewMemberFirstName] = useState("");
 const [newMemberLastName, setNewMemberLastName] = useState("");
@@ -159,6 +161,20 @@ const [articleTypes, setArticleTypes] = useState<ArticleType[]>([]);
 const [memberTypeEntitlements, setMemberTypeEntitlements] = useState<
   MemberTypeEntitlement[]
 >([]);
+useEffect(() => {
+  const {
+    data: { subscription },
+  } = supabase.auth.onAuthStateChange((event) => {
+    if (event === "PASSWORD_RECOVERY") {
+      setResetMode(true);
+      setMessage("");
+    }
+  });
+
+  return () => {
+    subscription.unsubscribe();
+  };
+}, []);
 const memberTypeIds: Record<string, number> = {
   Speler: 1,
   Selectiespeler: 2,
@@ -1181,7 +1197,98 @@ await loadMemberTypeEntitlements();
     setLoggedIn(true);
     setLoading(false);
   }
+async function handleForgotPassword() {
+  if (!email.trim()) {
+    setMessage("Vul eerst je e-mailadres in.");
+    return;
+  }
 
+  setMessage("");
+
+  const { error } = await supabase.auth.resetPasswordForEmail(
+    email.trim(),
+    {
+      redirectTo: window.location.origin,
+    }
+  );
+
+  if (error) {
+    setMessage("Resetlink kon niet worden verstuurd: " + error.message);
+    return;
+  }
+
+  setMessage(
+    "Er is een e-mail verstuurd waarmee je een nieuw wachtwoord kunt instellen."
+  );
+}
+async function handleUpdatePassword() {
+  if (newPassword.length < 6) {
+    setMessage("Het nieuwe wachtwoord moet minimaal 6 tekens bevatten.");
+    return;
+  }
+
+  setMessage("");
+
+  const { error } = await supabase.auth.updateUser({
+    password: newPassword,
+  });
+
+  if (error) {
+    setMessage("Wachtwoord kon niet worden gewijzigd: " + error.message);
+    return;
+  }
+
+  setNewPassword("");
+  setResetMode(false);
+  setMessage("Je wachtwoord is gewijzigd. Je kunt nu inloggen.");
+}
+if (resetMode) {
+  return (
+    <main className="min-h-screen bg-gray-100 flex items-center justify-center p-6">
+      <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-lg">
+        <h1 className="text-3xl font-bold text-gray-900">
+          Nieuw wachtwoord
+        </h1>
+
+        <p className="mt-2 text-gray-600">
+          Kies een nieuw wachtwoord voor je account.
+        </p>
+
+        <div className="mt-8">
+          <label
+            htmlFor="new-password"
+            className="block text-sm font-medium text-gray-700"
+          >
+            Nieuw wachtwoord
+          </label>
+
+          <input
+            id="new-password"
+            type="password"
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+            className="mt-2 w-full rounded-lg border border-gray-300 px-4 py-3 text-gray-900 outline-none focus:border-gray-500"
+            placeholder="Je nieuwe wachtwoord"
+          />
+        </div>
+
+        <button
+          type="button"
+          onClick={handleUpdatePassword}
+          className="mt-5 w-full rounded-lg bg-gray-900 px-4 py-3 font-medium text-white hover:bg-gray-700"
+        >
+          Wachtwoord opslaan
+        </button>
+
+        {message && (
+          <p className="mt-5 rounded-lg bg-gray-100 p-3 text-sm text-gray-800">
+            {message}
+          </p>
+        )}
+      </div>
+    </main>
+  );
+}
   if (loggedIn) {
     return (
       <main className="min-h-screen bg-gray-100 p-6">
@@ -2329,9 +2436,16 @@ const groupMissing = Math.max(groupExpected - groupIssued, 0);
           Kledingbeheer
         </h1>
 
-        <p className="mt-2 text-gray-600">
-          Voetbalvereniging
-        </p>
+      <div className="mt-3 flex items-center gap-2">
+  <img
+    src="/sc-leovardia-logo.jpg"
+    alt="S.C. Leovardia"
+    className="h-10 w-10 rounded-full object-cover"
+  />
+  <span className="text-sm font-medium text-gray-600">
+    sc Leovardia
+  </span>
+</div>
 
         <form onSubmit={handleLogin} className="mt-8 space-y-5">
           <div>
@@ -2371,7 +2485,15 @@ const groupMissing = Math.max(groupExpected - groupIssued, 0);
               placeholder="Je wachtwoord"
             />
           </div>
-
+<div className="text-right">
+  <button
+    type="button"
+onClick={handleForgotPassword}
+    className="text-sm font-medium text-gray-600 hover:text-gray-900 hover:underline"
+  >
+    Wachtwoord vergeten?
+  </button>
+</div>
           <button
             type="submit"
             disabled={loading}
