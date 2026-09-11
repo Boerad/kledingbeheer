@@ -113,6 +113,7 @@ export default function Home() {
 const [resetMode, setResetMode] = useState(false);
 const [newPassword, setNewPassword] = useState("");
   const [message, setMessage] = useState("");
+const [returnMessages, setReturnMessages] = useState<Record<number, string>>({});
 const [newMemberFirstName, setNewMemberFirstName] = useState("");
 const [newMemberLastName, setNewMemberLastName] = useState("");
 const [newMemberTypeId, setNewMemberTypeId] = useState<number | null>(null);
@@ -126,6 +127,7 @@ const [newMemberPhone, setNewMemberPhone] = useState("");
   const [teamBagsWithShortage, setTeamBagsWithShortage] = useState(0);
 const [members, setMembers] = useState<MemberSummary[]>([]);
 const [teamBags, setTeamBags] = useState<TeamBag[]>([]);
+const [teamBagContentMessage, setTeamBagContentMessage] = useState("");
 const [selectedTeamBagId, setSelectedTeamBagId] = useState<number | null>(null);
 const [teamBagHolderName, setTeamBagHolderName] = useState("");
 const [teamBagHolderLastName, setTeamBagHolderLastName] = useState("");
@@ -136,6 +138,9 @@ const [teamBagReturnMessage, setTeamBagReturnMessage] = useState("");
 const [teamBagReturnActual, setTeamBagReturnActual] = useState<Record<number, number>>({});
 const [teamBagReturnDamaged, setTeamBagReturnDamaged] = useState<Record<number, number>>({});
 const [teamBagContents, setTeamBagContents] = useState<TeamBagContent[]>([]);
+const [newBagArticleId, setNewBagArticleId] = useState<number | null>(5);
+const [newBagSizeId, setNewBagSizeId] = useState<number | null>(null);
+const [newBagQuantity, setNewBagQuantity] = useState(1);
 const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
 const [activeSection, setActiveSection] = useState<string>("overzicht");
 const [itemSearchNumber, setItemSearchNumber] = useState("");
@@ -158,10 +163,18 @@ const [clothingDetails, setClothingDetails] = useState<ClothingStatus[]>([]);
 const [availableItems, setAvailableItems] = useState<IndividualItem[]>([]);
 const [inventoryItems, setInventoryItems] = useState<IndividualItem[]>([]);
 const [articleTypes, setArticleTypes] = useState<ArticleType[]>([]);
+const [stockMessage, setStockMessage] = useState("");
 const [memberTypeEntitlements, setMemberTypeEntitlements] = useState<
   MemberTypeEntitlement[]
 >([]);
 useEffect(() => {
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    if (session) {
+      setLoggedIn(true);
+      loadDashboard();
+    }
+  });
+
   const {
     data: { subscription },
   } = supabase.auth.onAuthStateChange((event) => {
@@ -439,6 +452,136 @@ setTeamBagHolderLastName("");
   setTeamBagHolderPhone("");
 
   await loadDashboard();
+}
+async function addTeamBagContent() {
+  if (selectedTeamBagId === null) {
+  setTeamBagContentMessage("Geen teamtas geselecteerd.");
+  return;
+}
+
+if (newBagArticleId === null) {
+  setTeamBagContentMessage("Geen kledingstuk geselecteerd.");
+  return;
+}
+
+if (newBagSizeId === null) {
+  setTeamBagContentMessage("Geen maat geselecteerd.");
+  return;
+}
+
+  const { error } = await supabase
+    .from("team_bag_contents")
+    .insert({
+      team_bag_id: selectedTeamBagId,
+      article_type_id: newBagArticleId,
+      size_id: newBagSizeId,
+      expected_quantity: newBagQuantity,
+      actual_quantity: newBagQuantity,
+      damaged_quantity: 0,
+    });
+
+  if (error) {
+    setTeamBagContentMessage(
+      "Kledingstuk kon niet aan de teamtas worden toegevoegd: " +
+        error.message
+    );
+    return;
+  }
+
+  setNewBagArticleId(5);
+  setNewBagSizeId(null);
+  setNewBagQuantity(1);
+
+  await loadDashboard();
+
+  setTeamBagContentMessage(
+    "Kledingstuk is succesvol aan de teamtas toegevoegd."
+  );
+}
+async function removeTeamBagContent() {
+  if (selectedTeamBagId === null) {
+    setTeamBagContentMessage("Geen teamtas geselecteerd.");
+    return;
+  }
+
+  if (newBagArticleId === null) {
+    setTeamBagContentMessage("Geen kledingstuk geselecteerd.");
+    return;
+  }
+
+  if (newBagSizeId === null) {
+    setTeamBagContentMessage("Geen maat geselecteerd.");
+    return;
+  }
+
+  const matchingItem = teamBagContents.find(
+    (item) =>
+      item.team_bag_id === selectedTeamBagId &&
+      item.article_type_id === newBagArticleId &&
+      item.size_id === newBagSizeId
+  );
+
+  if (!matchingItem) {
+    setTeamBagContentMessage(
+      "Dit kledingstuk met deze maat staat niet in de teamtas."
+    );
+    return;
+  }
+
+  if (newBagQuantity > matchingItem.expected_quantity) {
+    setTeamBagContentMessage(
+      "Je kunt niet meer innemen dan er in de teamtas zit."
+    );
+    return;
+  }
+
+  const newExpectedQuantity =
+    matchingItem.expected_quantity - newBagQuantity;
+
+  const newActualQuantity = Math.max(
+    0,
+    matchingItem.actual_quantity - newBagQuantity
+  );
+
+  if (newExpectedQuantity === 0) {
+    const { error } = await supabase
+      .from("team_bag_contents")
+      .delete()
+      .eq("id", matchingItem.id);
+
+    if (error) {
+      setTeamBagContentMessage(
+        "Kledingstuk kon niet uit de teamtas worden verwijderd: " +
+          error.message
+      );
+      return;
+    }
+  } else {
+    const { error } = await supabase
+      .from("team_bag_contents")
+      .update({
+        expected_quantity: newExpectedQuantity,
+        actual_quantity: newActualQuantity,
+      })
+      .eq("id", matchingItem.id);
+
+    if (error) {
+      setTeamBagContentMessage(
+        "Kledingstuk kon niet worden ingenomen: " + error.message
+      );
+      return;
+    }
+  }
+
+  setNewBagArticleId(5);
+  setNewBagSizeId(null);
+  setNewBagQuantity(1);
+
+  await loadDashboard();
+
+  setTeamBagContentMessage(
+    "Kledingstuk is succesvol uit de teamtas ingenomen."
+  );
 }
 async function returnTeamBag() {
   setTeamBagReturnMessage("");
@@ -754,7 +897,10 @@ async function markFoundItemReturned(foundItemId: number) {
 async function addStockItem() {
   setMessage("");
 
-  if (newStockArticleId === null || newStockSizeId === null) {
+if (
+  newStockArticleId === null ||
+  (newStockSizeId === null && ![12, 13].includes(newStockArticleId))
+) {
     setMessage("Kies eerst een kledingstuk en een maat.");
     return;
   }
@@ -784,7 +930,7 @@ if (error) {
   return;
 }
 
-setMessage(
+setStockMessage(
   newStockWithoutNumber
     ? `${newStockQuantity} kledingstukken zijn toegevoegd aan de voorraad.`
     : `Kledingstuk ${newStockNumber.trim()} is toegevoegd aan de voorraad.`
@@ -948,10 +1094,6 @@ setIssueMessages((prev) => ({
 async function returnItem(assignment: CurrentAssignment) {
   const returnCondition = returnConditions[assignment.id] ?? "good";
 
-  setMessage(
-    `Retour gestart: id ${assignment.id}, kledingstuk ${assignment.unique_number}`
-
-);
   const returnedDate = new Date().toISOString().split("T")[0];
 
  const { data: updatedAssignments, error: assignmentError } = await supabase
@@ -992,10 +1134,9 @@ if (itemError) {
   return;
 }
 
-setMessage(
-  `Kledingstuk ${assignment.unique_number} is succesvol ingenomen.`
-);
-
+setReturnMessages({
+  [assignment.id]: `Kledingstuk ${assignment.unique_number} is succesvol ingenomen.`,
+});
 await loadMemberDetails(assignment.member_id);
 await loadDashboard();
 }
@@ -1014,7 +1155,8 @@ async function loadMemberDetails(memberId: number) {
     );
     return;
   }
-
+setMessage("");
+setReturnMessages({});
   setSelectedMemberId(memberId);
 const selectedMember = members.find(
   (member) => member.member_id === memberId
@@ -1197,6 +1339,17 @@ await loadMemberTypeEntitlements();
     setLoggedIn(true);
     setLoading(false);
   }
+async function handleLogout() {
+  const { error } = await supabase.auth.signOut();
+
+  if (error) {
+    setMessage("Uitloggen mislukt: " + error.message);
+    return;
+  }
+
+  setLoggedIn(false);
+  setMessage("");
+}
 async function handleForgotPassword() {
   if (!email.trim()) {
     setMessage("Vul eerst je e-mailadres in.");
@@ -1293,14 +1446,38 @@ if (resetMode) {
     return (
       <main className="min-h-screen bg-gray-100 p-6">
         <div className="mx-auto max-w-6xl">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold text-gray-900">
-              Kledingbeheer
-            </h1>
+         <div className="mb-8">
+  <div className="flex items-start justify-between">
+  <div className="flex items-center gap-4">
+  <img
+    src="/sc-leovardia-logo.jpg"
+    alt="sc Leovardia"
+    className="h-16 w-16 rounded-full object-cover"
+  />
 
-            <p className="mt-2 text-gray-600">
-              Dashboard voetbalvereniging
-            </p>
+  <div>
+    <h1 className="text-3xl font-bold text-gray-900">
+      Kledingbeheer
+    </h1>
+
+    <p className="mt-1 text-gray-600">
+      sc Leovardia
+    </p>
+  </div>
+</div>
+
+ <div className="flex items-center gap-3">
+ 
+
+  <button
+    type="button"
+    onClick={handleLogout}
+   className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+  >
+    Uitloggen
+  </button>
+</div>
+  </div>
 <div className="mt-4 flex flex-wrap gap-2">
   <button
     type="button"
@@ -1355,9 +1532,17 @@ if (resetMode) {
 </div>
           </div>
 
-          {message && (
+          {message && message !== "Persoon is succesvol toegevoegd." && (
             <div className="mb-6 rounded-lg bg-white p-4 shadow">
-              <p className="text-sm text-red-700">{message}</p>
+           <p
+  className={`text-sm ${
+    message.toLowerCase().includes("succesvol")
+      ? "text-green-700"
+      : "text-red-700"
+  }`}
+>
+  {message}
+</p>
             </div>
           )}
 <div className="mb-8 grid gap-4 md:grid-cols-3">
@@ -1579,7 +1764,7 @@ onClick={registerFoundItem}
         </option>
       ))}
     </select>
-
+{![12, 13].includes(newStockArticleId ?? 0) && (
     <select
       value={newStockSizeId ?? ""}
       onChange={(e) =>
@@ -1596,6 +1781,7 @@ onClick={registerFoundItem}
         </option>
       ))}
     </select>
+)}
 <input
   type="text"
   placeholder="Nummer"
@@ -1631,6 +1817,11 @@ onClick={registerFoundItem}
 >
   Toevoegen
 </button>
+{stockMessage && (
+  <p className="mt-2 text-sm text-green-600">
+    {stockMessage}
+  </p>
+)}
   </div>
 </div>
 )}
@@ -1854,9 +2045,26 @@ onClick={registerFoundItem}
     </thead>
 
     <tbody>
-      {teamBagContents
-        .filter((item) => item.team_bag_id === selectedTeamBagId)
-        .map((item) => {
+    {teamBagContents
+  .filter((item) => item.team_bag_id === selectedTeamBagId)
+  .sort((a, b) => {
+    const articleA =
+      articleTypes.find((article) => article.id === a.article_type_id)?.name ?? "";
+    const articleB =
+      articleTypes.find((article) => article.id === b.article_type_id)?.name ?? "";
+
+    const articleCompare = articleA.localeCompare(articleB);
+
+    if (articleCompare !== 0) {
+      return articleCompare;
+    }
+
+    const sizeIndexA = sizes.findIndex((size) => size.id === a.size_id);
+    const sizeIndexB = sizes.findIndex((size) => size.id === b.size_id);
+
+    return sizeIndexA - sizeIndexB;
+  })
+  .map((item) => {
           const article = articleTypes.find(
             (article) => article.id === item.article_type_id
           );
@@ -1916,6 +2124,85 @@ onClick={registerFoundItem}
         })}
     </tbody>
   </table>
+<h3 className="mt-4 text-sm font-bold text-gray-900">
+  Nieuwe kleding toevoegen of innemen
+</h3>
+<div className="mt-4 flex flex-wrap items-center gap-3">
+  <select
+    value={newBagArticleId ?? ""}
+    onChange={(e) =>
+      setNewBagArticleId(
+        e.target.value ? Number(e.target.value) : null
+      )
+    }
+    className="rounded-lg border border-gray-300 px-3 py-2"
+  >
+   {articleTypes
+  .filter((article) =>
+    [5, 6, 7, 19].includes(article.id)
+  )
+  .map((article) => (
+    <option key={article.id} value={article.id}>
+      {article.name}
+    </option>
+  ))}
+  </select>
+
+  <select
+    value={newBagSizeId ?? ""}
+    onChange={(e) =>
+      setNewBagSizeId(
+        e.target.value ? Number(e.target.value) : null
+      )
+    }
+    className="rounded-lg border border-gray-300 px-3 py-2"
+  >
+    <option value="">Kies maat</option>
+    {sizes.map((size) => (
+      <option key={size.id} value={size.id}>
+        {size.name}
+      </option>
+    ))}
+  </select>
+
+  <input
+    type="number"
+    min="1"
+    value={newBagQuantity}
+    onChange={(e) =>
+      setNewBagQuantity(
+        Math.max(1, Number(e.target.value))
+      )
+    }
+    className="w-24 rounded-lg border border-gray-300 px-3 py-2"
+  />
+
+  <button
+    type="button"
+    onClick={addTeamBagContent}
+    className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+  >
+    Toevoegen
+  </button>
+<button
+  type="button"
+  onClick={removeTeamBagContent}
+className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+>
+  Innemen
+</button>
+{teamBagContentMessage && (
+  <p
+    className={`text-sm ${
+      teamBagContentMessage.toLowerCase().includes("succes")
+        ? "text-green-600"
+        : "text-red-600"
+    }`}
+  >
+    {teamBagContentMessage}
+  </p>
+)}
+</div>
 </div> 
 <div className="mt-6 border-t border-gray-200 pt-4">
   <h3 className="font-bold text-gray-900">
@@ -2060,6 +2347,11 @@ onClick={registerFoundItem}
     >
       Toevoegen
     </button>
+{message === "Persoon is succesvol toegevoegd." && (
+  <p className="mt-2 text-sm text-green-600">
+    {message}
+  </p>
+)}
   </div>
 </div>
 <div className="mt-8 overflow-hidden rounded-2xl bg-white shadow">
@@ -2238,7 +2530,7 @@ onClick={registerFoundItem}
   <button
     type="button"
     onClick={() => returnItem(assignment)}
-    className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+   className="rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-700"
   >
     Innemen
   </button>
@@ -2246,6 +2538,14 @@ onClick={registerFoundItem}
   </div>
 ))}
     </div>
+{Object.values(returnMessages).map((returnMessage) => (
+  <p
+    key={returnMessage}
+    className="mt-2 text-sm text-green-600"
+  >
+    {returnMessage}
+  </p>
+))}
   </div>
 )}
       <table className="w-full text-left">
@@ -2399,6 +2699,11 @@ const groupMissing = Math.max(groupExpected - groupIssued, 0);
     >
       Uitgeven
 </button>
+
+  </>
+) : (
+    <span className="text-sm text-gray-400">Compleet</span>
+  )}
 {issueMessages[groupKey] && (
 <div
   className={`mt-2 text-sm ${
@@ -2410,10 +2715,6 @@ const groupMissing = Math.max(groupExpected - groupIssued, 0);
     {issueMessages[groupKey]}
   </div>
 )}
-  </>
-) : (
-    <span className="text-sm text-gray-400">Compleet</span>
-  )}
 </td>
             </tr>
          );
