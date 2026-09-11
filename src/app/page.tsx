@@ -869,6 +869,7 @@ setFoundItemMessageType("error");
     );
     return;
   }
+await loadDashboard();
 setFoundItemMessageType("success");
   setFoundItemMessage("Gevonden voorwerp is geregistreerd.");
   setFoundItemNote("");
