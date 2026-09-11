@@ -1133,12 +1133,14 @@ if (itemError) {
   );
   return;
 }
+setIssueMessages({});
+
+await loadMemberDetails(assignment.member_id);
+await loadDashboard();
 
 setReturnMessages({
   [assignment.id]: `Kledingstuk ${assignment.unique_number} is succesvol ingenomen.`,
 });
-await loadMemberDetails(assignment.member_id);
-await loadDashboard();
 }
 
 async function loadMemberDetails(memberId: number) {
@@ -2538,16 +2540,17 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
   </div>
 ))}
     </div>
+
+  </div>
+)}
 {Object.values(returnMessages).map((returnMessage) => (
   <p
     key={returnMessage}
-    className="mt-2 text-sm text-green-600"
+    className="px-6 py-3 text-sm text-green-600"
   >
     {returnMessage}
   </p>
 ))}
-  </div>
-)}
       <table className="w-full text-left">
         <thead className="bg-gray-50">
           <tr>
