@@ -1158,7 +1158,6 @@ async function loadMemberDetails(memberId: number) {
     return;
   }
 setMessage("");
-setReturnMessages({});
   setSelectedMemberId(memberId);
 const selectedMember = members.find(
   (member) => member.member_id === memberId
