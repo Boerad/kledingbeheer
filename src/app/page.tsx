@@ -73,6 +73,7 @@ type CurrentAssignment = {
   id: number;
   member_id: number;
   article: string | null;
+charge_amount: number | null;
   unique_number: string;
   size: string | null;
   condition: string | null;
@@ -350,6 +351,18 @@ const [currentAssignments, setCurrentAssignments] = useState<CurrentAssignment[]
 const [returnConditions, setReturnConditions] = useState<
   Record<number, "good" | "damaged">
 >({});
+const [returnChargeStatus, setReturnChargeStatus] = useState<
+  Record<number, "no_charge" | "charged" | "paid" | "refused">
+>({});
+const [returnPaymentStatus, setReturnPaymentStatus] = useState<
+  Record<number, "paid" | "refused">
+>({});
+const [returnChargeAmount, setReturnChargeAmount] = useState<
+  Record<number, string>
+>({});
+const [returnPaidAt, setReturnPaidAt] = useState<
+  Record<number, string>
+>({});
 const [selectedChoiceArticles, setSelectedChoiceArticles] = useState<
   Record<string, number>
 >({});
@@ -377,9 +390,9 @@ const [numberSizeLabels, setNumberSizeLabels] = useState<
 async function loadCurrentAssignments(memberId: number) {
   const { data, error } = await supabase
     .from("current_item_assignments")
-    .select(
-      "id, member_id, article, unique_number, size, condition, issued_date"
-    )
+  .select(
+  "id, member_id, article, charge_amount, unique_number, size, condition, issued_date"
+)
     .eq("member_id", memberId);
 
   if (error) {
@@ -1142,14 +1155,51 @@ setIssueMessages((prev) => ({
 
 async function returnItem(assignment: CurrentAssignment) {
   const returnCondition = returnConditions[assignment.id] ?? "good";
+const chargeStatus =
+  returnCondition === "damaged"
+    ? returnChargeStatus[assignment.id] ?? null
+    : null;
 
-  const returnedDate = new Date().toISOString().split("T")[0];
+const paymentStatus =
+  chargeStatus === "charged"
+    ? returnPaymentStatus[assignment.id] ?? null
+    : null;
+
+const chargeAmount =
+  chargeStatus === "charged"
+    ? Number(
+        String(
+          returnChargeAmount[assignment.id] ??
+            assignment.charge_amount ??
+            0
+        ).replace(",", ".")
+      )
+    : null;
+if (returnCondition === "damaged" && !chargeStatus) {
+  setMessage("Kies eerst de financiële afhandeling.");
+  return;
+}
+
+if (
+  chargeStatus === "charged" &&
+  (chargeAmount === null || !Number.isFinite(chargeAmount) || chargeAmount <= 0)
+) {
+  setMessage("Vul eerst een geldig bedrag in.");
+  return;
+}
+
+const returnedDate = new Date().toISOString().split("T")[0];
 
  const { data: updatedAssignments, error: assignmentError } = await supabase
   .from("item_assignments")
- .update({
+.update({
   returned_date: returnedDate,
   condition_at_return: returnCondition,
+  charge_status:
+    chargeStatus === "charged" ? paymentStatus : chargeStatus,
+  charge_amount: chargeAmount,
+  paid_at:
+    paymentStatus === "paid" ? returnedDate : null,
 })
   .eq("id", assignment.id)
   .select("id, returned_date");
@@ -2681,7 +2731,65 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
     <option value="good">Goed</option>
     <option value="damaged">Beschadigd</option>
   </select>
-
+{returnConditions[assignment.id] === "damaged" && (
+  <select
+    value={returnChargeStatus[assignment.id] ?? ""}
+    onChange={(e) =>
+      setReturnChargeStatus((prev) => ({
+        ...prev,
+        [assignment.id]: e.target.value as
+          | "no_charge"
+          | "charged"
+          | "paid"
+          | "refused",
+      }))
+    }
+    className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
+  >
+ <option value="">Financiële afhandeling</option>
+<option value="no_charge">Geen kosten</option>
+<option value="charged">In rekening gebracht</option>
+  </select>
+)}
+{returnConditions[assignment.id] === "damaged" &&
+  returnChargeStatus[assignment.id] === "charged" && (
+  <select
+  value={returnPaymentStatus[assignment.id] ?? ""}
+  onChange={(e) =>
+    setReturnPaymentStatus((prev) => ({
+      ...prev,
+      [assignment.id]: e.target.value as "paid" | "refused",
+    }))
+  }
+  className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
+>
+      <option value="">Betaling</option>
+      <option value="paid">Betaald</option>
+      <option value="refused">Betaling geweigerd</option>
+    </select>
+  )}
+{returnConditions[assignment.id] === "damaged" &&
+  returnChargeStatus[assignment.id] === "charged" && (
+    <input
+      type="text"
+inputMode="decimal"
+     
+      placeholder="Bedrag €"
+      value={
+        returnChargeAmount[assignment.id] ??
+        (assignment.charge_amount !== null
+          ? String(assignment.charge_amount)
+          : "")
+      }
+      onChange={(e) =>
+        setReturnChargeAmount((prev) => ({
+          ...prev,
+          [assignment.id]: e.target.value,
+        }))
+      }
+      className="w-28 rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
+    />
+  )}
   <button
     type="button"
     onClick={() => returnItem(assignment)}
