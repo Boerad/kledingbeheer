@@ -158,6 +158,8 @@ const [foundItemMessageType, setFoundItemMessageType] =
 const [foundItems, setFoundItems] = useState<FoundItem[]>([]);
 const [showFoundItemForm, setShowFoundItemForm] = useState(false);
 const [memberSearch, setMemberSearch] = useState("");
+const [memberSort, setMemberSort] =
+  useState<"firstName" | "lastName" | "type">("firstName");
 const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
 const [clothingDetails, setClothingDetails] = useState<ClothingStatus[]>([]);
 const [availableItems, setAvailableItems] = useState<IndividualItem[]>([]);
@@ -224,6 +226,50 @@ const filteredMembers = members.filter((member) => {
     fullName.includes(memberSearch.toLowerCase().trim());
 
   return matchesGroup && matchesSearch;
+});
+filteredMembers.sort((a, b) => {
+  if (memberSort === "type") {
+    const typeCompare = (a.member_type ?? "").localeCompare(
+      b.member_type ?? "",
+      "nl"
+    );
+
+    if (typeCompare !== 0) return typeCompare;
+  }
+
+ if (memberSort === "lastName") {
+  const getSortLastName = (lastName: string | null) => {
+    return (lastName ?? "")
+      .replace(
+        /^(van der|van den|van de|van het|van|de|den|der|ten|ter)\s+/i,
+        ""
+      )
+      .trim();
+  };
+
+  const lastNameCompare = getSortLastName(a.last_name).localeCompare(
+    getSortLastName(b.last_name),
+    "nl"
+  );
+
+  if (lastNameCompare !== 0) return lastNameCompare;
+
+  return (a.first_name ?? "").localeCompare(
+    b.first_name ?? "",
+    "nl"
+  );
+}
+  const firstNameCompare = (a.first_name ?? "").localeCompare(
+    b.first_name ?? "",
+    "nl"
+  );
+
+  if (firstNameCompare !== 0) return firstNameCompare;
+
+  return (a.last_name ?? "").localeCompare(
+    b.last_name ?? "",
+    "nl"
+  );
 });
 const selectedMemberFoundItems =
   selectedMemberId !== null
@@ -2363,13 +2409,29 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
     </h2>
   </div>
 <div className="border-b border-gray-200 px-6 py-4">
-  <input
-    type="text"
-    value={memberSearch}
-    onChange={(e) => setMemberSearch(e.target.value)}
-    placeholder="Zoek op voor- of achternaam"
-    className="w-full max-w-md rounded-lg border border-gray-300 px-4 py-2 text-sm"
-  />
+  <div className="flex flex-wrap gap-3">
+    <input
+      type="text"
+      value={memberSearch}
+      onChange={(e) => setMemberSearch(e.target.value)}
+      placeholder="Zoek op voor- of achternaam"
+      className="w-full max-w-md rounded-lg border border-gray-300 px-4 py-2 text-sm"
+    />
+
+    <select
+      value={memberSort}
+      onChange={(e) =>
+        setMemberSort(
+          e.target.value as "firstName" | "lastName" | "type"
+        )
+      }
+      className="rounded-lg border border-gray-300 px-4 py-2 text-sm"
+    >
+      <option value="firstName">Sorteren op voornaam</option>
+      <option value="lastName">Sorteren op achternaam</option>
+      <option value="type">Sorteren op type</option>
+    </select>
+  </div>
 </div>
   <div className="overflow-x-auto">
     <table className="w-full text-left">
