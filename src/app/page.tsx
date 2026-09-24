@@ -164,6 +164,8 @@ const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
 const [clothingDetails, setClothingDetails] = useState<ClothingStatus[]>([]);
 const [availableItems, setAvailableItems] = useState<IndividualItem[]>([]);
 const [inventoryItems, setInventoryItems] = useState<IndividualItem[]>([]);
+const [selectedInventoryArticleId, setSelectedInventoryArticleId] =
+  useState<number | null>(null);
 const [articleTypes, setArticleTypes] = useState<ArticleType[]>([]);
 const [stockMessage, setStockMessage] = useState("");
 const [memberTypeEntitlements, setMemberTypeEntitlements] = useState<
@@ -1874,68 +1876,154 @@ onClick={registerFoundItem}
 </div>
 )}
 {activeSection === "voorraad" && (
-<div className="mt-8 rounded-2xl bg-white p-6 shadow">
-  <h2 className="text-lg font-bold text-gray-900">
-    Voorraadoverzicht
-  </h2>
-<p className="mt-2 text-sm text-gray-600">
-  Totaal kledingstukken: {filteredInventoryItems.length}
-</p>
-<p className="mt-1 text-sm text-gray-600">
-  Beschikbaar: {filteredInventoryItems.filter((item) => item.status === "available").length}
-</p>
-<p className="mt-1 text-sm text-gray-600">
-  Uitgegeven: {filteredInventoryItems.filter((item) => item.status === "issued").length}
-</p>
-<p className="mt-1 text-sm text-gray-600">
-  Beschadigd: {filteredInventoryItems.filter((item) => item.status === "damaged").length}
-</p>
-<div className="mt-6 overflow-x-auto">
-  <table className="w-full text-left">
-    <thead className="border-b border-gray-200">
-      <tr>
-        <th className="px-3 py-2 text-sm font-medium text-gray-600">
-          Kledingstuk
-        </th>
-        <th className="px-3 py-2 text-sm font-medium text-gray-600">
-          Totaal
-        </th>
-        <th className="px-3 py-2 text-sm font-medium text-gray-600">
-          Beschikbaar
-        </th>
-        <th className="px-3 py-2 text-sm font-medium text-gray-600">
-          Uitgegeven
-        </th>
-        <th className="px-3 py-2 text-sm font-medium text-gray-600">
-          Beschadigd
-        </th>
-      </tr>
-    </thead>
+  <div className="mt-8 overflow-hidden rounded-2xl bg-white p-6 shadow">
+    <h2 className="text-xl font-bold text-gray-900">
+      Voorraadoverzicht
+    </h2>
 
-    <tbody>
-      {inventorySummary.map((item) => (
-        <tr key={item.article_type_id} className="border-b border-gray-100">
-          <td className="px-3 py-2 text-sm text-gray-700">
-            {item.article}
-          </td>
-          <td className="px-3 py-2 text-sm text-gray-700">
-            {item.total}
-          </td>
-          <td className="px-3 py-2 text-sm text-gray-700">
-            {item.available}
-          </td>
-          <td className="px-3 py-2 text-sm text-gray-700">
-            {item.issued}
-          </td>
-          <td className="px-3 py-2 text-sm text-gray-700">
-            {item.damaged}
-          </td>
-        </tr>
-      ))}
-    </tbody>
-  </table>
-</div>
-</div>
+    <p className="mt-2 text-sm text-gray-600">
+      Totaal kledingstukken: {filteredInventoryItems.length}
+    </p>
+    <p className="mt-1 text-sm text-gray-600">
+      Beschikbaar:{" "}
+      {filteredInventoryItems.filter((item) => item.status === "available").length}
+    </p>
+    <p className="mt-1 text-sm text-gray-600">
+      Uitgegeven:{" "}
+      {filteredInventoryItems.filter((item) => item.status === "issued").length}
+    </p>
+    <p className="mt-1 text-sm text-gray-600">
+      Beschadigd:{" "}
+      {filteredInventoryItems.filter((item) => item.status === "damaged").length}
+    </p>
+
+    <div className="mt-6 overflow-x-auto">
+      <table className="w-full text-left">
+        <thead className="border-b border-gray-200">
+          <tr>
+            <th className="px-3 py-2 text-sm font-medium text-gray-600">
+              Kledingstuk
+            </th>
+            <th className="px-3 py-2 text-sm font-medium text-gray-600">
+              Totaal
+            </th>
+            <th className="px-3 py-2 text-sm font-medium text-gray-600">
+              Beschikbaar
+            </th>
+            <th className="px-3 py-2 text-sm font-medium text-gray-600">
+              Uitgegeven
+            </th>
+            <th className="px-3 py-2 text-sm font-medium text-gray-600">
+              Beschadigd
+            </th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {inventorySummary.map((item) => (
+            <tr
+              key={item.article_type_id}
+              onClick={() =>
+                setSelectedInventoryArticleId(item.article_type_id)
+              }
+              className="cursor-pointer border-b border-gray-100 hover:bg-gray-50"
+            >
+              <td className="px-3 py-2 text-sm text-gray-700">
+                {item.article}
+              </td>
+              <td className="px-3 py-2 text-sm text-gray-700">
+                {item.total}
+              </td>
+              <td className="px-3 py-2 text-sm text-gray-700">
+                {item.available}
+              </td>
+              <td className="px-3 py-2 text-sm text-gray-700">
+                {item.issued}
+              </td>
+              <td className="px-3 py-2 text-sm text-gray-700">
+                {item.damaged}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    {selectedInventoryArticleId !== null && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="max-h-[80vh] w-full max-w-3xl overflow-hidden rounded-2xl bg-white shadow-xl">
+          <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+            <h3 className="text-lg font-bold text-gray-900">
+              Voorraaddetails —{" "}
+              {inventorySummary.find(
+                (item) =>
+                  item.article_type_id === selectedInventoryArticleId
+              )?.article ?? ""}
+            </h3>
+
+            <button
+              type="button"
+              onClick={() => setSelectedInventoryArticleId(null)}
+              className="rounded-lg border border-gray-300 px-3 py-1 text-sm hover:bg-gray-50"
+            >
+              Sluiten
+            </button>
+          </div>
+
+          <div className="max-h-[65vh] overflow-y-auto p-6">
+            <table className="w-full text-left">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2 text-sm font-medium text-gray-600">
+                    Nummer
+                  </th>
+                  <th className="px-3 py-2 text-sm font-medium text-gray-600">
+                    Maat
+                  </th>
+                  <th className="px-3 py-2 text-sm font-medium text-gray-600">
+                    Status
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {inventoryItems
+                  .filter(
+                    (inventoryItem) =>
+                      inventoryItem.article_type_id ===
+                      selectedInventoryArticleId
+                  )
+                  .map((inventoryItem) => (
+                    <tr
+                      key={inventoryItem.id}
+                      className="border-b border-gray-100"
+                    >
+                      <td className="px-3 py-2 text-sm text-gray-700">
+                        {inventoryItem.unique_number || "Geen nummer"}
+                      </td>
+                      <td className="px-3 py-2 text-sm text-gray-700">
+                        {sizes.find(
+                          (size) => size.id === inventoryItem.size_id
+                        )?.name ?? "-"}
+                      </td>
+                      <td className="px-3 py-2 text-sm text-gray-700">
+                        {inventoryItem.status === "available"
+                          ? "Beschikbaar"
+                          : inventoryItem.status === "issued"
+                          ? "Uitgegeven"
+                          : inventoryItem.status === "damaged"
+                          ? "Beschadigd"
+                          : inventoryItem.status}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    )}
+  </div>
 )}
 {activeSection === "teamtassen" && (
 <div className="mt-8 overflow-hidden rounded-2xl bg-white shadow">
