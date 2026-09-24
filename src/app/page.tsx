@@ -53,6 +53,7 @@ type Size = {
 type ArticleType = {
   id: number;
   name: string;
+charge_amount: number | null;
 };
 type MemberTypeEntitlement = {
   member_type_id: number;
@@ -136,6 +137,15 @@ const [teamBagHolderMail, setTeamBagHolderMail] = useState("");
 const [teamBagHolderPhone, setTeamBagHolderPhone] = useState("");
 const [teamBagIssueMessage, setTeamBagIssueMessage] = useState("");
 const [teamBagReturnMessage, setTeamBagReturnMessage] = useState("");
+const [teamBagChargeStatus, setTeamBagChargeStatus] = useState<
+"no_charge" | "charged" | ""
+>("");
+const [teamBagPaymentStatus, setTeamBagPaymentStatus] = useState<
+  "paid" | "refused" | ""
+>("");
+const [teamBagChargeAmount, setTeamBagChargeAmount] = useState("");
+const [teamBagCalculatedChargeAmount, setTeamBagCalculatedChargeAmount] =
+  useState(0);
 const [teamBagReturnActual, setTeamBagReturnActual] = useState<Record<number, number>>({});
 const [teamBagReturnDamaged, setTeamBagReturnDamaged] = useState<Record<number, number>>({});
 const [teamBagContents, setTeamBagContents] = useState<TeamBagContent[]>([]);
@@ -172,6 +182,42 @@ const [stockMessage, setStockMessage] = useState("");
 const [memberTypeEntitlements, setMemberTypeEntitlements] = useState<
   MemberTypeEntitlement[]
 >([]);
+useEffect(() => {
+  const contents = teamBagContents.filter(
+    (item) => item.team_bag_id === selectedTeamBagId
+  );
+
+  let total = 0;
+
+  for (const item of contents) {
+    const actualQuantity =
+      teamBagReturnActual[item.id] ?? item.actual_quantity;
+
+    const damagedQuantity =
+      teamBagReturnDamaged[item.id] ?? item.damaged_quantity;
+
+    const missingQuantity = Math.max(
+      item.expected_quantity - actualQuantity,
+      0
+    );
+
+    const article = articleTypes.find(
+      (articleType) => articleType.id === item.article_type_id
+    );
+
+    total +=
+      (missingQuantity + damagedQuantity) *
+      (article?.charge_amount ?? 0);
+  }
+
+  setTeamBagCalculatedChargeAmount(total);
+}, [
+  selectedTeamBagId,
+  teamBagContents,
+  teamBagReturnActual,
+  teamBagReturnDamaged,
+  articleTypes,
+]);
 useEffect(() => {
   supabase.auth.getSession().then(({ data: { session } }) => {
     if (session) {
@@ -459,7 +505,7 @@ async function loadMemberTypeEntitlements() {
 async function loadArticleTypes() {
   const { data, error } = await supabase
     .from("article_types")
-    .select("id, name");
+  .select("id, name, charge_amount");
 
   if (error) {
     setMessage(
@@ -472,6 +518,7 @@ async function loadArticleTypes() {
 }
 async function issueTeamBag() {
  setTeamBagIssueMessage("");
+setTeamBagReturnMessage("");
   if (selectedTeamBagId === null) {
     setMessage("Kies eerst een teamtas.");
     return;
@@ -646,6 +693,7 @@ async function removeTeamBagContent() {
 }
 async function returnTeamBag() {
   setTeamBagReturnMessage("");
+setTeamBagIssueMessage("");
 
   if (selectedTeamBagId === null) {
     setTeamBagReturnMessage("Kies eerst een teamtas.");
@@ -698,6 +746,30 @@ if (!selectedBag) {
   setTeamBagReturnMessage("Teamtas kon niet worden gevonden.");
   return;
 }
+let calculatedChargeAmount = 0;
+
+for (const item of contents) {
+  const actualQuantity =
+    teamBagReturnActual[item.id] ?? item.actual_quantity;
+
+  const damagedQuantity =
+    teamBagReturnDamaged[item.id] ?? item.damaged_quantity;
+
+  const missingQuantity = Math.max(
+    item.expected_quantity - actualQuantity,
+    0
+  );
+
+  const article = articleTypes.find(
+    (articleType) => articleType.id === item.article_type_id
+  );
+
+  const price = article?.charge_amount ?? 0;
+
+  calculatedChargeAmount +=
+    (missingQuantity + damagedQuantity) * price;
+}
+setTeamBagCalculatedChargeAmount(calculatedChargeAmount);
 
 const returnedAt = new Date().toISOString();
 
@@ -724,10 +796,23 @@ if (historyError) {
 }
   const { error: bagError } = await supabase
     .from("team_bags")
-    .update({
-      status: "returned",
-   returned_at: returnedAt,
-    })
+ .update({
+  status: "returned",
+  returned_at: returnedAt,
+  charge_status:
+    teamBagChargeStatus === "charged"
+      ? teamBagPaymentStatus
+      : teamBagChargeStatus,
+  charge_amount:
+    teamBagChargeStatus === "charged"
+      ? calculatedChargeAmount
+      : null,
+  paid_at:
+    teamBagChargeStatus === "charged" &&
+    teamBagPaymentStatus === "paid"
+      ? returnedAt.split("T")[0]
+      : null,
+})
     .eq("id", selectedTeamBagId);
 
   if (bagError) {
@@ -2446,7 +2531,48 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
   </div>
 )}
 <div className="mt-4 w-full border-t border-gray-200 pt-4">
-  <button
+<select
+  value={teamBagChargeStatus}
+  onChange={(e) =>
+    setTeamBagChargeStatus(
+      e.target.value as "no_charge" | "charged" | ""
+    )
+  }
+  className="mr-2 rounded-lg border border-gray-300 px-2 py-2 text-sm text-gray-700"
+>
+  <option value="">Financiële afhandeling</option>
+  <option value="no_charge">Geen kosten</option>
+  <option value="charged">In rekening gebracht</option>
+</select>
+{teamBagChargeStatus === "charged" && (
+  <select
+value={teamBagPaymentStatus}
+onChange={(e) =>
+  setTeamBagPaymentStatus(
+    e.target.value as "paid" | "refused" | ""
+  )
+}
+    className="mr-2 rounded-lg border border-gray-300 px-2 py-2 text-sm text-gray-700"
+  >
+    <option value="">Betaling</option>
+    <option value="paid">Betaald</option>
+    <option value="refused">Betaling geweigerd</option>
+  </select>
+)}
+{teamBagChargeStatus === "charged" && (
+  <input
+    type="text"
+    inputMode="decimal"
+    placeholder="Bedrag €"
+    value={
+  teamBagChargeAmount ||
+  teamBagCalculatedChargeAmount.toFixed(2).replace(".", ",")
+}
+    onChange={(e) => setTeamBagChargeAmount(e.target.value)}
+    className="mr-2 w-28 rounded-lg border border-gray-300 px-2 py-2 text-sm text-gray-700"
+  />
+)}
+<button
     type="button"
     onClick={returnTeamBag}
     className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
