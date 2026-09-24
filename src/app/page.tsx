@@ -2406,7 +2406,10 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
        {filteredMembers.map((member) => (
          <tr
   key={member.member_id}
-  onClick={() => loadMemberDetails(member.member_id)}
+ onClick={() => {
+  setReturnMessages({});
+  loadMemberDetails(member.member_id);
+}}
   className="cursor-pointer border-t border-gray-100 hover:bg-gray-50"
 >
             <td className="px-6 py-4 text-gray-900">
