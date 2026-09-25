@@ -72,6 +72,7 @@ type InventorySummary = {
 };
 type CurrentAssignment = {
   id: number;
+individual_item_id: number;
   member_id: number;
   article: string | null;
 charge_amount: number | null;
@@ -397,6 +398,15 @@ const [currentAssignments, setCurrentAssignments] = useState<CurrentAssignment[]
 const [returnConditions, setReturnConditions] = useState<
   Record<number, "good" | "damaged">
 >({});
+const [returnReasons, setReturnReasons] = useState<
+  Record<number, "returned" | "size_swap" | "damaged">
+>({});
+const [swapArticleTypes, setSwapArticleTypes] = useState<
+  Record<number, number>
+>({});
+const [swapItems, setSwapItems] = useState<
+  Record<number, number>
+>({});
 const [returnChargeStatus, setReturnChargeStatus] = useState<
   Record<number, "no_charge" | "charged" | "paid" | "refused">
 >({});
@@ -437,7 +447,7 @@ async function loadCurrentAssignments(memberId: number) {
   const { data, error } = await supabase
     .from("current_item_assignments")
   .select(
-  "id, member_id, article, charge_amount, unique_number, size, condition, issued_date"
+  "id, member_id, article, charge_amount, unique_number, size, condition, issued_date, individual_item_id"
 )
     .eq("member_id", memberId);
 
@@ -453,9 +463,9 @@ async function loadCurrentAssignments(memberId: number) {
 async function loadAvailableItems(articleTypeId: number) {
   const { data, error } = await supabase
     .from("individual_items")
-    .select(
-      "id, article_type_id, size_id, unique_number, status, condition"
-    )
+.select(
+  "id, article_type_id, size_id, unique_number, status, condition"
+)
     .eq("article_type_id", articleTypeId)
     .eq("status", "available");
 
@@ -1158,7 +1168,7 @@ if (!uniqueNumber.trim() && sizeId === null) {
     ...prev,
     [groupKey]: "Vul een nummer in of kies een maat.",
   }));
-  return;
+return false;
 }
 
  let itemQuery = supabase
@@ -1182,7 +1192,7 @@ const { data: items, error: itemsError } = await itemQuery.limit(1);
       "Beschikbare kleding kon niet worden geladen: " +
       itemsError.message,
   }));
-  return;
+ return false;
 }
 
  if (!items || items.length === 0) {
@@ -1190,7 +1200,7 @@ const { data: items, error: itemsError } = await itemQuery.limit(1);
     ...prev,
     [groupKey]: "Er is geen passend kledingstuk op voorraad.",
   }));
-  return;
+  return false;
 }
 
   const item = items[0];
@@ -1210,7 +1220,7 @@ const { data: items, error: itemsError } = await itemQuery.limit(1);
       "Kledingstuk kon niet worden uitgegeven: " +
       assignmentError.message,
   }));
-  return;
+return false;
 }
 
   const { error: updateError } = await supabase
@@ -1225,7 +1235,7 @@ const { data: items, error: itemsError } = await itemQuery.limit(1);
       "Status van kledingstuk kon niet worden bijgewerkt: " +
       updateError.message,
   }));
-  return;
+return false;
 }
 
 setIssueMessages((prev) => ({
@@ -1235,7 +1245,9 @@ setIssueMessages((prev) => ({
     : "Kledingstuk is succesvol uitgegeven.",
 }));
   await loadMemberDetails(memberId);
-  await loadDashboard();
+await loadDashboard();
+
+return true;
 }
 
 async function returnItem(assignment: CurrentAssignment) {
@@ -1244,7 +1256,26 @@ const chargeStatus =
   returnCondition === "damaged"
     ? returnChargeStatus[assignment.id] ?? null
     : null;
+const returnReason = returnReasons[assignment.id] ?? "returned";
+const swapItemId =
+  returnReason === "size_swap"
+    ? swapItems[assignment.id] ?? null
+    : null;
+let selectedSwapItem: IndividualItem | null = null;
+if (returnReason === "size_swap" && !swapItemId) {
+  setMessage("Kies eerst het nieuwe kledingstuk voor de maatwissel.");
+  return;
+}
+if (returnReason === "size_swap") {
+selectedSwapItem = availableItems.find(
+    (item) => item.id === swapItemId
+  );
 
+  if (!selectedSwapItem) {
+    setMessage("Het gekozen nieuwe kledingstuk kon niet worden gevonden.");
+    return;
+  }
+}
 const paymentStatus =
   chargeStatus === "charged"
     ? returnPaymentStatus[assignment.id] ?? null
@@ -1264,7 +1295,10 @@ if (returnCondition === "damaged" && !chargeStatus) {
   setMessage("Kies eerst de financiële afhandeling.");
   return;
 }
-
+if (chargeStatus === "charged" && !paymentStatus) {
+  setMessage("Kies eerst Betaald of Betaling geweigerd.");
+  return;
+}
 if (
   chargeStatus === "charged" &&
   (chargeAmount === null || !Number.isFinite(chargeAmount) || chargeAmount <= 0)
@@ -1274,12 +1308,13 @@ if (
 }
 
 const returnedDate = new Date().toISOString().split("T")[0];
-
+if (returnReason !== "size_swap") {
  const { data: updatedAssignments, error: assignmentError } = await supabase
   .from("item_assignments")
 .update({
   returned_date: returnedDate,
   condition_at_return: returnCondition,
+return_reason: returnReasons[assignment.id] ?? "returned",
   charge_status:
     chargeStatus === "charged" ? paymentStatus : chargeStatus,
   charge_amount: chargeAmount,
@@ -1317,8 +1352,26 @@ if (itemError) {
   );
   return;
 }
+}
 setIssueMessages({});
 
+if (returnReason === "size_swap" && selectedSwapItem) {
+  const { error: swapError } = await supabase.rpc(
+    "swap_individual_item",
+    {
+      p_assignment_id: assignment.id,
+      p_old_item_id: assignment.individual_item_id,
+      p_new_item_id: selectedSwapItem.id,
+      p_member_id: assignment.member_id,
+      p_returned_date: returnedDate,
+    }
+  );
+
+  if (swapError) {
+    setMessage("Maatwissel kon niet worden uitgevoerd: " + swapError.message);
+    return;
+  }
+}
 await loadMemberDetails(assignment.member_id);
 await loadDashboard();
 
@@ -2857,6 +2910,75 @@ onChange={(e) =>
     <option value="good">Goed</option>
     <option value="damaged">Beschadigd</option>
   </select>
+<select
+  value={returnReasons[assignment.id] ?? "returned"}
+  onChange={(e) =>
+    setReturnReasons((prev) => ({
+      ...prev,
+      [assignment.id]: e.target.value as
+        | "returned"
+        | "size_swap"
+        | "damaged",
+    }))
+  }
+  className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
+>
+  <option value="returned">Definitief ingeleverd</option>
+  <option value="size_swap">Maatwissel</option>
+  <option value="damaged">Beschadigd</option>
+</select>
+{returnReasons[assignment.id] === "size_swap" && (
+<>
+  <select
+    value={swapArticleTypes[assignment.id] ?? ""}
+   onChange={(e) => {
+  const articleTypeId = Number(e.target.value);
+
+  setSwapArticleTypes((prev) => ({
+    ...prev,
+    [assignment.id]: articleTypeId,
+  }));
+
+  setSwapItems((prev) => ({
+    ...prev,
+    [assignment.id]: 0,
+  }));
+
+  if (articleTypeId) {
+    loadAvailableItems(articleTypeId);
+  }
+}}
+    className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
+  >
+    <option value="">Nieuw artikel kiezen</option>
+    {articleTypes.map((articleType) => (
+      <option key={articleType.id} value={articleType.id}>
+        {articleType.name}
+      </option>
+    ))}
+  </select>
+{swapArticleTypes[assignment.id] && (
+  <select
+    value={swapItems[assignment.id] ?? ""}
+    onChange={(e) =>
+      setSwapItems((prev) => ({
+        ...prev,
+        [assignment.id]: Number(e.target.value),
+      }))
+    }
+    className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
+  >
+    <option value="">Nieuw exemplaar kiezen</option>
+    {availableItems.map((item) => (
+      <option key={item.id} value={item.id}>
+        Nr. {item.unique_number ?? "-"} -{" "}
+        {sizes.find((size) => size.id === item.size_id)?.name ?? "-"}
+      </option>
+    ))}
+  </select>
+)}
+</>
+)}
 {returnConditions[assignment.id] === "damaged" && (
   <select
     value={returnChargeStatus[assignment.id] ?? ""}
