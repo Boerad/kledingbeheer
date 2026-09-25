@@ -117,6 +117,7 @@ const [resetMode, setResetMode] = useState(false);
 const [newPassword, setNewPassword] = useState("");
   const [message, setMessage] = useState("");
 const [returnMessages, setReturnMessages] = useState<Record<number, string>>({});
+const [returnErrors, setReturnErrors] = useState<Record<number, string>>({});
 const [newMemberFirstName, setNewMemberFirstName] = useState("");
 const [newMemberLastName, setNewMemberLastName] = useState("");
 const [newMemberTypeId, setNewMemberTypeId] = useState<number | null>(null);
@@ -397,6 +398,17 @@ const inventorySummary: InventorySummary[] = articleTypes
 const [currentAssignments, setCurrentAssignments] = useState<CurrentAssignment[]>([]);
 const [returnConditions, setReturnConditions] = useState<
   Record<number, "good" | "damaged">
+>({});
+const [presentationReturnParts, setPresentationReturnParts] = useState<
+  Record<
+    number,
+    {
+      jacketReturned: boolean;
+      jacketCondition: "good" | "damaged";
+      pantsReturned: boolean;
+      pantsCondition: "good" | "damaged";
+    }
+  >
 >({});
 const [returnReasons, setReturnReasons] = useState<
   Record<number, "returned" | "size_swap" | "damaged">
@@ -1252,18 +1264,57 @@ return true;
 
 async function returnItem(assignment: CurrentAssignment) {
   const returnCondition = returnConditions[assignment.id] ?? "good";
+const returnReason = returnReasons[assignment.id] ?? "returned";
+const presentationParts =
+  assignment.article === "Presentatiepak"
+    ? presentationReturnParts[assignment.id] ?? {
+        jacketReturned: true,
+        jacketCondition: "good" as const,
+        pantsReturned: true,
+        pantsCondition: "good" as const,
+      }
+    : null;
+
+const jacketReturnStatus = presentationParts
+  ? presentationParts.jacketReturned
+    ? presentationParts.jacketCondition
+    : "missing"
+  : null;
+
+const pantsReturnStatus = presentationParts
+  ? presentationParts.pantsReturned
+    ? presentationParts.pantsCondition
+    : "missing"
+  : null;
+
+const presentationNeedsFinancialHandling =
+  presentationParts !== null &&
+  (jacketReturnStatus === "damaged" ||
+    jacketReturnStatus === "missing" ||
+    pantsReturnStatus === "damaged" ||
+    pantsReturnStatus === "missing");
+
+  console.log("Presentatiepak retour:", {
+    assignmentId: assignment.id,
+    uniqueNumber: assignment.unique_number,
+  jacketReturned: presentationParts?.jacketReturned,
+jacketCondition: presentationParts?.jacketCondition,
+pantsReturned: presentationParts?.pantsReturned,
+pantsCondition: presentationParts?.pantsCondition,
+  });
 const chargeStatus =
-  returnCondition === "damaged"
+  returnCondition === "damaged" || presentationNeedsFinancialHandling
     ? returnChargeStatus[assignment.id] ?? null
     : null;
-const returnReason = returnReasons[assignment.id] ?? "returned";
 const swapItemId =
   returnReason === "size_swap"
     ? swapItems[assignment.id] ?? null
     : null;
 let selectedSwapItem: IndividualItem | null = null;
 if (returnReason === "size_swap" && !swapItemId) {
-  setMessage("Kies eerst het nieuwe kledingstuk voor de maatwissel.");
+setReturnErrors({
+  [assignment.id]: "Kies eerst het nieuwe kledingstuk voor de maatwissel.",
+});
   return;
 }
 if (returnReason === "size_swap") {
@@ -1272,7 +1323,9 @@ selectedSwapItem = availableItems.find(
   );
 
   if (!selectedSwapItem) {
-    setMessage("Het gekozen nieuwe kledingstuk kon niet worden gevonden.");
+ setReturnErrors({
+  [assignment.id]: "Het gekozen nieuwe kledingstuk kon niet worden gevonden.",
+});
     return;
   }
 }
@@ -1286,24 +1339,119 @@ const chargeAmount =
     ? Number(
         String(
           returnChargeAmount[assignment.id] ??
-            assignment.charge_amount ??
-            0
+            (
+              assignment.article === "Presentatiepak"
+                ? (
+                    (presentationParts?.jacketReturned === false ||
+                    presentationParts?.jacketCondition === "damaged"
+                      ? 45
+                      : 0) +
+                    (presentationParts?.pantsReturned === false ||
+                    presentationParts?.pantsCondition === "damaged"
+                      ? 40
+                      : 0)
+                  )
+                : assignment.charge_amount ?? 0
+            )
         ).replace(",", ".")
       )
     : null;
-if (returnCondition === "damaged" && !chargeStatus) {
-  setMessage("Kies eerst de financiële afhandeling.");
+if (
+  (returnCondition === "damaged" || presentationNeedsFinancialHandling) &&
+  !chargeStatus
+) {
+  setReturnErrors({
+    [assignment.id]: "Kies eerst de financiële afhandeling.",
+  });
   return;
 }
 if (chargeStatus === "charged" && !paymentStatus) {
-  setMessage("Kies eerst Betaald of Betaling geweigerd.");
+setReturnErrors({
+  [assignment.id]: "Kies eerst Betaald of Betaling geweigerd.",
+});
   return;
 }
 if (
   chargeStatus === "charged" &&
   (chargeAmount === null || !Number.isFinite(chargeAmount) || chargeAmount <= 0)
 ) {
-  setMessage("Vul eerst een geldig bedrag in.");
+setReturnErrors({
+  [assignment.id]: "Vul eerst een geldig bedrag in.",
+});
+  return;
+}
+
+if (presentationParts && presentationNeedsFinancialHandling) {
+
+if (returnReason === "size_swap") {
+  setReturnMessages({
+    [assignment.id]:
+      "Presentatiepak is compleet en goed terug. Maatwissel kan zonder financiële afhandeling worden uitgevoerd.",
+  });
+}
+  const returnedDate = new Date().toISOString().split("T")[0];
+
+  const { error: presentationReturnError } =
+  returnReason === "size_swap" && presentationNeedsFinancialHandling
+    ? await supabase.rpc("swap_partial_presentation_set", {
+        p_assignment_id: assignment.id,
+        p_old_item_id: assignment.individual_item_id,
+        p_new_item_id: selectedSwapItem!.id,
+        p_member_id: assignment.member_id,
+        p_returned_date: returnedDate,
+        p_jacket_status: jacketReturnStatus,
+        p_pants_status: pantsReturnStatus,
+        p_charge_status:
+          chargeStatus === "charged" ? paymentStatus : chargeStatus,
+        p_charge_amount: chargeAmount,
+        p_paid_at: paymentStatus === "paid" ? returnedDate : null,
+      })
+: await supabase.rpc("return_partial_presentation_set", {
+    p_assignment_id: assignment.id,
+    p_original_item_id: assignment.individual_item_id,
+    p_member_id: assignment.member_id,
+    p_returned_date: returnedDate,
+    p_jacket_status: jacketReturnStatus,
+    p_pants_status: pantsReturnStatus,
+    p_charge_status:
+      chargeStatus === "charged" ? paymentStatus : chargeStatus,
+    p_charge_amount: chargeAmount,
+    p_paid_at: paymentStatus === "paid" ? returnedDate : null,
+  });
+  if (presentationReturnError) {
+    setReturnErrors({
+      [assignment.id]:
+        "Presentatiepak kon niet worden ingenomen: " +
+        presentationReturnError.message,
+    });
+    return;
+  }
+
+ setReturnMessages({
+  [assignment.id]: `Presentatiepak is ingenomen: jack ${
+    jacketReturnStatus === "good"
+      ? "goed"
+      : jacketReturnStatus === "damaged"
+      ? "beschadigd"
+      : "ontbreekt"
+  }, broek ${
+    pantsReturnStatus === "good"
+      ? "goed"
+      : pantsReturnStatus === "damaged"
+      ? "beschadigd"
+      : "ontbreekt"
+  }.${
+    returnReason === "size_swap" && selectedSwapItem
+      ? ` Presentatiepak ${
+          selectedSwapItem.unique_number ?? "-"
+        } is succesvol uitgegeven.`
+      : ""
+  }`,
+});
+
+  await loadMemberDetails(assignment.member_id);
+  await loadDashboard();
+
   return;
 }
 
@@ -1325,17 +1473,19 @@ return_reason: returnReasons[assignment.id] ?? "returned",
   .select("id, returned_date");
 
 if (assignmentError) {
-  setMessage(
-    "Kledingstuk kon niet worden ingenomen: " +
-      assignmentError.message
-  );
+  setReturnErrors({
+    [assignment.id]:
+      "Kledingstuk kon niet worden ingenomen: " +
+      assignmentError.message,
+  });
   return;
 }
 
 if (!updatedAssignments || updatedAssignments.length === 0) {
-  setMessage(
-    `Geen item_assignment gevonden met id ${assignment.id}`
-  );
+  setReturnErrors({
+    [assignment.id]:
+      `Geen item_assignment gevonden met id ${assignment.id}`,
+  });
   return;
 }
 const { error: itemError } = await supabase
@@ -1344,12 +1494,13 @@ const { error: itemError } = await supabase
     status: returnCondition === "good" ? "available" : "damaged",
     condition: returnCondition,
   })
-  .eq("unique_number", assignment.unique_number);
+.eq("id", assignment.individual_item_id);
 if (itemError) {
-  setMessage(
-    "Status van kledingstuk kon niet worden bijgewerkt: " +
-      itemError.message
-  );
+  setReturnErrors({
+    [assignment.id]:
+      "Status van kledingstuk kon niet worden bijgewerkt: " +
+      itemError.message,
+  });
   return;
 }
 }
@@ -1368,15 +1519,23 @@ if (returnReason === "size_swap" && selectedSwapItem) {
   );
 
   if (swapError) {
-    setMessage("Maatwissel kon niet worden uitgevoerd: " + swapError.message);
-    return;
-  }
+  setReturnErrors({
+    [assignment.id]:
+      "Maatwissel kon niet worden uitgevoerd: " + swapError.message,
+  });
+  return;
+}
 }
 await loadMemberDetails(assignment.member_id);
 await loadDashboard();
 
 setReturnMessages({
-  [assignment.id]: `Kledingstuk ${assignment.unique_number} is succesvol ingenomen.`,
+  [assignment.id]:
+    returnReason === "size_swap" && selectedSwapItem
+      ? `Kledingstuk ${assignment.unique_number} is succesvol ingenomen. ${
+          selectedSwapItem.unique_number ?? "-"
+        } is succesvol uitgegeven.`
+      : `Kledingstuk ${assignment.unique_number} is succesvol ingenomen.`,
 });
 }
 
@@ -2885,181 +3044,355 @@ onChange={(e) =>
     </p>
 
     <div className="space-y-1">
-     {currentAssignments.map((assignment) => (
+{currentAssignments.map((assignment) => (
   <div
     key={assignment.id}
-    className="flex items-center justify-between gap-4"
+    className="border-b border-gray-100 py-2 last:border-b-0"
   >
-    <p className="text-sm text-gray-600">
-      {assignment.article ?? "-"} — nummer{" "}
-      {assignment.unique_number} — maat{" "}
-      {assignment.size ?? "-"}
-    </p>
+    <div className="flex items-center justify-between gap-4">
+      <p className="text-sm text-gray-600">
+        {assignment.article ?? "-"} — nummer{" "}
+        {assignment.unique_number} — maat{" "}
+        {assignment.size ?? "-"}
+      </p>
 
-<div className="flex items-center gap-2">
-  <select
-  value={returnConditions[assignment.id] ?? "good"}
-    onChange={(e) =>
-  setReturnConditions((prev) => ({
-    ...prev,
-    [assignment.id]: e.target.value as "good" | "damaged",
-  }))
-}
-    className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
-  >
-    <option value="good">Goed</option>
-    <option value="damaged">Beschadigd</option>
-  </select>
-<select
-  value={returnReasons[assignment.id] ?? "returned"}
-  onChange={(e) =>
-    setReturnReasons((prev) => ({
-      ...prev,
-      [assignment.id]: e.target.value as
-        | "returned"
-        | "size_swap"
-        | "damaged",
-    }))
-  }
-  className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
->
-  <option value="returned">Definitief ingeleverd</option>
-  <option value="size_swap">Maatwissel</option>
-  <option value="damaged">Beschadigd</option>
-</select>
-{returnReasons[assignment.id] === "size_swap" && (
-<>
-  <select
-    value={swapArticleTypes[assignment.id] ?? ""}
-   onChange={(e) => {
-  const articleTypeId = Number(e.target.value);
+      <div className="flex items-center gap-2">
+        {assignment.article === "Presentatiepak" && (
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">Jack:</span>
 
-  setSwapArticleTypes((prev) => ({
-    ...prev,
-    [assignment.id]: articleTypeId,
-  }));
+            <select
+              value={
+                presentationReturnParts[assignment.id]?.jacketReturned === false
+                  ? "missing"
+                  : "returned"
+              }
+              onChange={(e) =>
+                setPresentationReturnParts((prev) => ({
+                  ...prev,
+                  [assignment.id]: {
+                    jacketReturned: e.target.value === "returned",
+                    jacketCondition:
+                      prev[assignment.id]?.jacketCondition ?? "good",
+                    pantsReturned:
+                      prev[assignment.id]?.pantsReturned ?? true,
+                    pantsCondition:
+                      prev[assignment.id]?.pantsCondition ?? "good",
+                  },
+                }))
+              }
+              className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+            >
+              <option value="returned">Terug</option>
+              <option value="missing">Ontbreekt</option>
+            </select>
 
-  setSwapItems((prev) => ({
-    ...prev,
-    [assignment.id]: 0,
-  }));
+            {(presentationReturnParts[assignment.id]?.jacketReturned ??
+              true) && (
+              <select
+                value={
+                  presentationReturnParts[assignment.id]?.jacketCondition ??
+                  "good"
+                }
+                onChange={(e) =>
+                  setPresentationReturnParts((prev) => ({
+                    ...prev,
+                    [assignment.id]: {
+                      jacketReturned:
+                        prev[assignment.id]?.jacketReturned ?? true,
+                      jacketCondition: e.target.value as "good" | "damaged",
+                      pantsReturned:
+                        prev[assignment.id]?.pantsReturned ?? true,
+                      pantsCondition:
+                        prev[assignment.id]?.pantsCondition ?? "good",
+                    },
+                  }))
+                }
+                className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+              >
+                <option value="good">Goed</option>
+                <option value="damaged">Beschadigd</option>
+              </select>
+            )}
 
-  if (articleTypeId) {
-    loadAvailableItems(articleTypeId);
-  }
-}}
-    className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
-  >
-    <option value="">Nieuw artikel kiezen</option>
-    {articleTypes.map((articleType) => (
-      <option key={articleType.id} value={articleType.id}>
-        {articleType.name}
-      </option>
-    ))}
-  </select>
-{swapArticleTypes[assignment.id] && (
-  <select
-    value={swapItems[assignment.id] ?? ""}
-    onChange={(e) =>
-      setSwapItems((prev) => ({
-        ...prev,
-        [assignment.id]: Number(e.target.value),
-      }))
-    }
-    className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
-  >
-    <option value="">Nieuw exemplaar kiezen</option>
-    {availableItems.map((item) => (
-      <option key={item.id} value={item.id}>
-        Nr. {item.unique_number ?? "-"} -{" "}
-        {sizes.find((size) => size.id === item.size_id)?.name ?? "-"}
-      </option>
-    ))}
-  </select>
-)}
-</>
-)}
-{returnConditions[assignment.id] === "damaged" && (
-  <select
-    value={returnChargeStatus[assignment.id] ?? ""}
-    onChange={(e) =>
-      setReturnChargeStatus((prev) => ({
-        ...prev,
-        [assignment.id]: e.target.value as
-          | "no_charge"
-          | "charged"
-          | "paid"
-          | "refused",
-      }))
-    }
-    className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
-  >
- <option value="">Financiële afhandeling</option>
-<option value="no_charge">Geen kosten</option>
-<option value="charged">In rekening gebracht</option>
-  </select>
-)}
-{returnConditions[assignment.id] === "damaged" &&
-  returnChargeStatus[assignment.id] === "charged" && (
-  <select
-  value={returnPaymentStatus[assignment.id] ?? ""}
-  onChange={(e) =>
-    setReturnPaymentStatus((prev) => ({
-      ...prev,
-      [assignment.id]: e.target.value as "paid" | "refused",
-    }))
-  }
-  className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
->
-      <option value="">Betaling</option>
-      <option value="paid">Betaald</option>
-      <option value="refused">Betaling geweigerd</option>
-    </select>
-  )}
-{returnConditions[assignment.id] === "damaged" &&
-  returnChargeStatus[assignment.id] === "charged" && (
-    <input
-      type="text"
-inputMode="decimal"
-     
-      placeholder="Bedrag €"
-      value={
-        returnChargeAmount[assignment.id] ??
-        (assignment.charge_amount !== null
-          ? String(assignment.charge_amount)
-          : "")
-      }
-      onChange={(e) =>
-        setReturnChargeAmount((prev) => ({
-          ...prev,
-          [assignment.id]: e.target.value,
-        }))
-      }
-      className="w-28 rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
-    />
-  )}
-  <button
-    type="button"
-    onClick={() => returnItem(assignment)}
-   className="rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-700"
-  >
-    Innemen
-  </button>
-</div>
+            <span className="text-sm font-medium">Broek:</span>
+
+            <select
+              value={
+                presentationReturnParts[assignment.id]?.pantsReturned === false
+                  ? "missing"
+                  : "returned"
+              }
+              onChange={(e) =>
+                setPresentationReturnParts((prev) => ({
+                  ...prev,
+                  [assignment.id]: {
+                    jacketReturned:
+                      prev[assignment.id]?.jacketReturned ?? true,
+                    jacketCondition:
+                      prev[assignment.id]?.jacketCondition ?? "good",
+                    pantsReturned: e.target.value === "returned",
+                    pantsCondition:
+                      prev[assignment.id]?.pantsCondition ?? "good",
+                  },
+                }))
+              }
+              className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+            >
+              <option value="returned">Terug</option>
+              <option value="missing">Ontbreekt</option>
+            </select>
+
+            {(presentationReturnParts[assignment.id]?.pantsReturned ??
+              true) && (
+              <select
+                value={
+                  presentationReturnParts[assignment.id]?.pantsCondition ??
+                  "good"
+                }
+                onChange={(e) =>
+                  setPresentationReturnParts((prev) => ({
+                    ...prev,
+                    [assignment.id]: {
+                      jacketReturned:
+                        prev[assignment.id]?.jacketReturned ?? true,
+                      jacketCondition:
+                        prev[assignment.id]?.jacketCondition ?? "good",
+                      pantsReturned:
+                        prev[assignment.id]?.pantsReturned ?? true,
+                      pantsCondition: e.target.value as "good" | "damaged",
+                    },
+                  }))
+                }
+                className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+              >
+                <option value="good">Goed</option>
+                <option value="damaged">Beschadigd</option>
+              </select>
+            )}
+          </div>
+        )}
+
+        {assignment.article !== "Presentatiepak" && (
+          <select
+            value={returnConditions[assignment.id] ?? "good"}
+            onChange={(e) =>
+              setReturnConditions((prev) => ({
+                ...prev,
+                [assignment.id]: e.target.value as "good" | "damaged",
+              }))
+            }
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
+          >
+            <option value="good">Goed</option>
+            <option value="damaged">Beschadigd</option>
+          </select>
+        )}
+
+        <select
+          value={returnReasons[assignment.id] ?? "returned"}
+          onChange={(e) =>
+            setReturnReasons((prev) => ({
+              ...prev,
+              [assignment.id]: e.target.value as
+                | "returned"
+                | "size_swap"
+                | "damaged",
+            }))
+          }
+          className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
+        >
+          <option value="returned">Definitief ingeleverd</option>
+          <option value="size_swap">Maatwissel</option>
+          <option value="damaged">Beschadigd</option>
+        </select>
+
+        {returnReasons[assignment.id] === "size_swap" && (
+          <>
+            <select
+              value={swapArticleTypes[assignment.id] ?? ""}
+              onChange={(e) => {
+                const articleTypeId = Number(e.target.value);
+
+                setSwapArticleTypes((prev) => ({
+                  ...prev,
+                  [assignment.id]: articleTypeId,
+                }));
+
+                setSwapItems((prev) => ({
+                  ...prev,
+                  [assignment.id]: 0,
+                }));
+
+                if (articleTypeId) {
+                  loadAvailableItems(articleTypeId);
+                }
+              }}
+              className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
+            >
+              <option value="">Nieuw artikel kiezen</option>
+              {articleTypes.map((articleType) => (
+                <option key={articleType.id} value={articleType.id}>
+                  {articleType.name}
+                </option>
+              ))}
+            </select>
+
+            {swapArticleTypes[assignment.id] && (
+              <select
+                value={swapItems[assignment.id] ?? ""}
+                onChange={(e) =>
+                  setSwapItems((prev) => ({
+                    ...prev,
+                    [assignment.id]: Number(e.target.value),
+                  }))
+                }
+                className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
+              >
+                <option value="">Nieuw exemplaar kiezen</option>
+                {availableItems.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    Nr. {item.unique_number ?? "-"} -{" "}
+                    {sizes.find((size) => size.id === item.size_id)?.name ?? "-"}
+                  </option>
+                ))}
+              </select>
+            )}
+          </>
+        )}
+
+        {(
+          returnConditions[assignment.id] === "damaged" ||
+          (assignment.article === "Presentatiepak" &&
+            (presentationReturnParts[assignment.id]?.jacketReturned === false ||
+              presentationReturnParts[assignment.id]?.jacketCondition ===
+                "damaged" ||
+              presentationReturnParts[assignment.id]?.pantsReturned === false ||
+              presentationReturnParts[assignment.id]?.pantsCondition ===
+                "damaged"))
+        ) && (
+          <select
+            value={returnChargeStatus[assignment.id] ?? ""}
+            onChange={(e) =>
+              setReturnChargeStatus((prev) => ({
+                ...prev,
+                [assignment.id]: e.target.value as
+                  | "no_charge"
+                  | "charged"
+                  | "paid"
+                  | "refused",
+              }))
+            }
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
+          >
+            <option value="">Financiële afhandeling</option>
+            <option value="no_charge">Geen kosten</option>
+            <option value="charged">In rekening gebracht</option>
+          </select>
+        )}
+
+        {(
+          returnConditions[assignment.id] === "damaged" ||
+          (assignment.article === "Presentatiepak" &&
+            (presentationReturnParts[assignment.id]?.jacketReturned === false ||
+              presentationReturnParts[assignment.id]?.jacketCondition ===
+                "damaged" ||
+              presentationReturnParts[assignment.id]?.pantsReturned === false ||
+              presentationReturnParts[assignment.id]?.pantsCondition ===
+                "damaged"))
+        ) &&
+          returnChargeStatus[assignment.id] === "charged" && (
+            <select
+              value={returnPaymentStatus[assignment.id] ?? ""}
+              onChange={(e) =>
+                setReturnPaymentStatus((prev) => ({
+                  ...prev,
+                  [assignment.id]: e.target.value as "paid" | "refused",
+                }))
+              }
+              className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
+            >
+              <option value="">Betaling</option>
+              <option value="paid">Betaald</option>
+              <option value="refused">Betaling geweigerd</option>
+            </select>
+          )}
+
+        {(
+          returnConditions[assignment.id] === "damaged" ||
+          (assignment.article === "Presentatiepak" &&
+            (presentationReturnParts[assignment.id]?.jacketReturned === false ||
+              presentationReturnParts[assignment.id]?.jacketCondition ===
+                "damaged" ||
+              presentationReturnParts[assignment.id]?.pantsReturned === false ||
+              presentationReturnParts[assignment.id]?.pantsCondition ===
+                "damaged"))
+        ) &&
+          returnChargeStatus[assignment.id] === "charged" && (
+            <input
+              type="text"
+              inputMode="decimal"
+              placeholder="Bedrag €"
+              value={
+                returnChargeAmount[assignment.id] ??
+                (assignment.article === "Presentatiepak"
+                  ? (
+                      (presentationReturnParts[assignment.id]?.jacketReturned ===
+                        false ||
+                      presentationReturnParts[assignment.id]?.jacketCondition ===
+                        "damaged"
+                        ? 45
+                        : 0) +
+                      (presentationReturnParts[assignment.id]?.pantsReturned ===
+                        false ||
+                      presentationReturnParts[assignment.id]?.pantsCondition ===
+                        "damaged"
+                        ? 40
+                        : 0)
+                    ).toString()
+                  : assignment.charge_amount !== null
+                    ? String(assignment.charge_amount)
+                    : "")
+              }
+              onChange={(e) =>
+                setReturnChargeAmount((prev) => ({
+                  ...prev,
+                  [assignment.id]: e.target.value,
+                }))
+              }
+              className="w-28 rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700"
+            />
+          )}
+
+        <button
+          type="button"
+          onClick={() => returnItem(assignment)}
+          className="rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-700"
+        >
+          Innemen
+        </button>
+      </div>
+    </div>
+
+    {returnErrors[assignment.id] && (
+      <p className="mt-2 text-sm text-red-600">
+        {returnErrors[assignment.id]}
+      </p>
+    )}
   </div>
 ))}
     </div>
 
+    {Object.values(returnMessages).map((returnMessage) => (
+      <p
+        key={returnMessage}
+        className="mt-3 text-sm text-green-600"
+      >
+        {returnMessage}
+      </p>
+    ))}
   </div>
 )}
-{Object.values(returnMessages).map((returnMessage) => (
-  <p
-    key={returnMessage}
-    className="px-6 py-3 text-sm text-green-600"
-  >
-    {returnMessage}
-  </p>
-))}
       <table className="w-full text-left">
         <thead className="bg-gray-50">
           <tr>
