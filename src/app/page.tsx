@@ -1318,9 +1318,8 @@ setReturnErrors({
   return;
 }
 if (returnReason === "size_swap") {
-selectedSwapItem = availableItems.find(
-    (item) => item.id === swapItemId
-  );
+selectedSwapItem =
+  availableItems.find((item) => item.id === swapItemId) ?? null;
 
   if (!selectedSwapItem) {
  setReturnErrors({
