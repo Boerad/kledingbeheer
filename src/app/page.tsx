@@ -159,6 +159,11 @@ const [activeSection, setActiveSection] = useState<string>("overzicht");
 const [itemSearchNumber, setItemSearchNumber] = useState("");
 const [itemSearchArticleId, setItemSearchArticleId] = useState<number | null>(null);
 const [itemSearchResult, setItemSearchResult] = useState<string>("");
+const [itemSearchItems, setItemSearchItems] = useState<IndividualItem[]>([]);
+const [showLooseFoundPartForm, setShowLooseFoundPartForm] = useState(false);
+const [looseFoundPartSizeId, setLooseFoundPartSizeId] = useState<number | null>(null);
+const [looseFoundPartCondition, setLooseFoundPartCondition] =
+  useState<"good" | "damaged">("good");
 const [foundItemId, setFoundItemId] = useState<number | null>(null);
 const [foundItemMemberId, setFoundItemMemberId] = useState<number | null>(null);
 const [foundItemPart, setFoundItemPart] = useState("");
@@ -897,6 +902,7 @@ async function searchItem() {
   }
 
   setItemSearchResult("");
+setItemSearchItems([]);
 setFoundItemMessage("");
 setFoundItemId(null);
 setFoundItemMemberId(null);
@@ -905,7 +911,7 @@ setFoundItemPart("");
   let query = supabase
   .from("individual_items")
   .select("id, article_type_id, size_id, unique_number, status, condition")
-  .eq("unique_number", searchNumber);
+.ilike("unique_number", `%${searchNumber}%`);
 
 if (itemSearchArticleId !== null) {
   query = query.eq("article_type_id", itemSearchArticleId);
@@ -922,6 +928,21 @@ const { data: items, error: itemError } = await query;
   setItemSearchResult("Geen kledingstuk gevonden met dit nummer.");
   return;
 }
+const visibleItems = items.filter((item) => {
+  const article = articleTypes.find(
+    (article) => article.id === item.article_type_id
+  );
+
+  const isRetiredLoosePresentationPart =
+    item.status === "retired" &&
+    (article?.name === "Presentatie jack" ||
+      article?.name === "Presentatie broek");
+
+  return !isRetiredLoosePresentationPart;
+});
+
+setItemSearchItems(visibleItems);
+
 const { data: assignments, error: assignmentError } = await supabase
   .from("current_item_assignments")
   .select("member_id, first_name, last_name, article, unique_number, size")
@@ -973,19 +994,91 @@ const results = items.map((item) => {
       ? `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim()
       : "Onbekende persoon";
 
-    return `${article?.name ?? "Onbekend kledingstuk"} | Maat: ${
-      size?.name ?? "-"
-    } | Uitgegeven aan: ${memberName}`;
+return `${article?.name ?? "Onbekend kledingstuk"} | Nummer: ${
+  item.unique_number ?? "-"
+} | Maat: ${size?.name ?? "-"} | Uitgegeven aan: ${memberName}`;
   }
 
-  return `${article?.name ?? "Onbekend kledingstuk"} | Maat: ${
-    size?.name ?? "-"
-  } | Niet uitgegeven`;
+return `${article?.name ?? "Onbekend kledingstuk"} | Nummer: ${
+  item.unique_number ?? "-"
+} | Maat: ${size?.name ?? "-"} | Niet uitgegeven`;
 });
 
 setItemSearchResult(results.join("\n"));
 }
+async function registerLooseFoundPresentationPart() {
+  const searchNumber = itemSearchNumber.trim();
+
+  if (!itemSearchArticleId) {
+    setFoundItemMessageType("error");
+    setFoundItemMessage("Kies eerst een artikel.");
+    return;
+  }
+
+  if (!searchNumber) {
+    setFoundItemMessageType("error");
+    setFoundItemMessage("Vul eerst een itemnummer in.");
+    return;
+  }
+
+  if (!looseFoundPartSizeId) {
+    setFoundItemMessageType("error");
+    setFoundItemMessage("Kies eerst een maat.");
+    return;
+  }
+const { data: existingItems, error: existingItemsError } =
+  await supabase
+    .from("individual_items")
+    .select("id")
+    .eq("article_type_id", itemSearchArticleId)
+    .eq("unique_number", searchNumber);
+
+if (existingItemsError) {
+  setFoundItemMessageType("error");
+  setFoundItemMessage(
+    "Controle op bestaande kledingstukken mislukt: " +
+      existingItemsError.message
+  );
+  return;
+}
+
+if ((existingItems ?? []).length > 0) {
+  setFoundItemMessageType("error");
+  setFoundItemMessage(
+    "Dit onderdeel bestaat inmiddels al in de voorraad. Zoek opnieuw voordat je het registreert."
+  );
+  return;
+}
+const { error: loosePartError } = await supabase.rpc(
+  "register_loose_found_presentation_part",
+  {
+    p_article_type_id: itemSearchArticleId,
+    p_unique_number: searchNumber,
+    p_size_id: looseFoundPartSizeId,
+    p_condition: looseFoundPartCondition,
+  }
+);
+
+if (loosePartError) {
+  setFoundItemMessageType("error");
+  setFoundItemMessage(
+    "Gevonden onderdeel kon niet worden geregistreerd: " +
+      loosePartError.message
+  );
+  return;
+}
+
+setFoundItemMessageType("success");
+setFoundItemMessage("Gevonden voorwerp is geregistreerd.");
+
+setLooseFoundPartSizeId(null);
+setLooseFoundPartCondition("good");
+setShowLooseFoundPartForm(false);
+}
 async function registerFoundItem() {
+let memberIdForFoundItem = foundItemMemberId;
+let presentationCounterpartName: string | null = null;
+
   if (foundItemId === null) {
     setFoundItemMessage("Er is geen kledingstuk geselecteerd.");
     return;
@@ -998,8 +1091,96 @@ async function registerFoundItem() {
     setFoundItemMessage("Kies eerst Jack of Broek.");
     return;
   }
+if (foundItemArticleName === "Presentatiepak") {
+  const selectedItem = itemSearchItems.find(
+    (item) => item.id === foundItemId
+  );
+
+  if (!selectedItem) {
+    setFoundItemMessageType("error");
+    setFoundItemMessage(
+      "Het geselecteerde Presentatiepak kon niet worden gevonden."
+    );
+    return;
+  }
+
+  const selectedSize = sizes.find(
+    (size) => size.id === selectedItem.size_id
+  );
+
+  const { data: currentPresentationAssignments, error: assignmentError } =
+    await supabase
+      .from("current_item_assignments")
+      .select("member_id, article, unique_number, size")
+      .eq("article", "Presentatiepak")
+      .eq("unique_number", selectedItem.unique_number)
+      .eq("size", selectedSize?.name ?? "");
+
+  if (assignmentError) {
+    setFoundItemMessageType("error");
+    setFoundItemMessage(
+      "Controle op uitgegeven Presentatiepak mislukt: " +
+        assignmentError.message
+    );
+    return;
+  }
+
+  const currentPresentationAssignment =
+    currentPresentationAssignments?.[0] ?? null;
+
+if (currentPresentationAssignment) {
+  memberIdForFoundItem = currentPresentationAssignment.member_id;
+  setFoundItemMemberId(currentPresentationAssignment.member_id);
+}
+if (!currentPresentationAssignment) {
+  const counterpartArticleName =
+    foundItemPart === "Jack"
+      ? "Presentatie broek"
+      : "Presentatie jack";
+
+  const counterpartArticle = articleTypes.find(
+    (article) => article.name === counterpartArticleName
+  );
+
+  if (!counterpartArticle) {
+    setFoundItemMessageType("error");
+    setFoundItemMessage(
+      "Het bijbehorende presentatieonderdeel kon niet worden gevonden."
+    );
+    return;
+  }
+
+  const { data: counterpartItems, error: counterpartError } =
+    await supabase
+      .from("individual_items")
+      .select("id, article_type_id, size_id, unique_number, status, condition")
+      .eq("article_type_id", counterpartArticle.id)
+      .eq("unique_number", selectedItem.unique_number)
+      .eq("size_id", selectedItem.size_id)
+      .eq("status", "incomplete");
+
+  if (counterpartError) {
+    setFoundItemMessageType("error");
+    setFoundItemMessage(
+      "Controle op een passend presentatieonderdeel mislukt: " +
+        counterpartError.message
+    );
+    return;
+  }
+
+if ((counterpartItems ?? []).length > 0) {
+presentationCounterpartName = counterpartArticleName;
+  setFoundItemMessageType("success");
+  setFoundItemMessage(
+    `Passende ${counterpartArticleName.toLowerCase()} gevonden. Met het gevonden onderdeel kan weer een compleet Presentatiepak worden gemaakt.`
+  );
+
+}
+}
+}
 
   setFoundItemMessage("");
+
 const { data: existingFoundItems, error: existingFoundItemError } =
   await supabase
     .from("found_items")
@@ -1022,11 +1203,47 @@ setFoundItemMessageType("error");
   );
   return;
 }
+if (foundItemArticleName === "Presentatiepak") {
+  const { error: presentationPartError } = await supabase.rpc(
+    "register_found_presentation_part",
+    {
+  p_original_item_id: foundItemId,
+  p_part: foundItemPart,
+  p_condition: "good",
+  p_member_id: memberIdForFoundItem,
+  p_note: foundItemNote.trim() || null,
+}
+  );
+
+  if (presentationPartError) {
+    setFoundItemMessageType("error");
+    setFoundItemMessage(
+      "Gevonden presentatieonderdeel kon niet aan de voorraad worden toegevoegd: " +
+        presentationPartError.message
+    );
+    return;
+  }
+  await loadDashboard();
+  setFoundItemMessageType("success");
+
+  if (presentationCounterpartName) {
+    setFoundItemMessage(
+      `Gevonden voorwerp is geregistreerd. Passende ${presentationCounterpartName.toLowerCase()} gevonden. Hiermee kan weer een compleet Presentatiepak worden gemaakt.`
+    );
+  } else {
+    setFoundItemMessage("Gevonden voorwerp is geregistreerd.");
+  }
+
+  setFoundItemNote("");
+  setFoundItemPart("");
+  setShowFoundItemForm(false);
+  return;
+}
   const { error } = await supabase
     .from("found_items")
     .insert({
       individual_item_id: foundItemId,
-      member_id: foundItemMemberId,
+member_id: memberIdForFoundItem,
       part: foundItemPart || null,
       note: foundItemNote.trim() || null,
     });
@@ -1039,11 +1256,21 @@ setFoundItemMessageType("error");
   }
 await loadDashboard();
 setFoundItemMessageType("success");
+
+setFoundItemMessageType("success");
+
+if (presentationCounterpartName) {
+  setFoundItemMessage(
+    `Gevonden voorwerp is geregistreerd. Passende ${presentationCounterpartName.toLowerCase()} gevonden. Hiermee kan weer een compleet Presentatiepak worden gemaakt.`
+  );
+} else {
   setFoundItemMessage("Gevonden voorwerp is geregistreerd.");
+}
   setFoundItemNote("");
   setFoundItemPart("");
   setShowFoundItemForm(false);
 }
+
 async function markFoundItemReturned(foundItemId: number) {
   const { error } = await supabase
     .from("found_items")
@@ -1263,6 +1490,7 @@ return true;
 }
 
 async function returnItem(assignment: CurrentAssignment) {
+setIssueMessages({});
   const returnCondition = returnConditions[assignment.id] ?? "good";
 const returnReason = returnReasons[assignment.id] ?? "returned";
 const presentationParts =
@@ -1503,7 +1731,7 @@ if (itemError) {
   return;
 }
 }
-setIssueMessages({});
+
 
 if (returnReason === "size_swap" && selectedSwapItem) {
   const { error: swapError } = await supabase.rpc(
@@ -2070,9 +2298,264 @@ if (resetMode) {
         Zoeken
       </button>
     </div>
-{itemSearchResult && (
-  <div className="mt-4 whitespace-pre-line rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
+{(() => {
+  const incompleteJacket = itemSearchItems.find((item) => {
+    const article = articleTypes.find(
+      (article) => article.id === item.article_type_id
+    );
+
+    return article?.name === "Presentatie jack" && item.status === "incomplete";
+  });
+
+const incompletePants = itemSearchItems.find((item) => {
+  const article = articleTypes.find(
+    (article) => article.id === item.article_type_id
+  );
+
+  return (
+    article?.name === "Presentatie broek" &&
+    item.status === "incomplete" &&
+    incompleteJacket !== undefined &&
+    item.unique_number === incompleteJacket.unique_number &&
+    item.size_id === incompleteJacket.size_id
+  );
+});
+
+if (!incompleteJacket || !incompletePants) {
+  return null;
+}
+
+return (
+  <div className="mb-3 rounded border border-green-200 bg-green-50 p-3">
+    <div className="mb-2 text-sm text-green-800">
+      Passende presentatiejack en presentatiebroek gevonden.
+      Hiermee kan weer een compleet Presentatiepak worden gemaakt.
+    </div>
+
+    <button
+      type="button"
+onClick={async () => {
+  const { error } = await supabase.rpc("complete_presentation_set", {
+    p_jacket_item_id: incompleteJacket.id,
+    p_pants_item_id: incompletePants.id,
+  });
+
+  if (error) {
+    setFoundItemMessageType("error");
+    setFoundItemMessage(
+      "Presentatiepak kon niet compleet worden gemaakt: " + error.message
+    );
+    return;
+  }
+
+  await searchItem();
+
+  setFoundItemMessageType("success");
+  setFoundItemMessage(
+    "Presentatiepak is compleet gemaakt en beschikbaar in de voorraad."
+  );
+}}
+      className="rounded bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+    >
+      Maak compleet Presentatiepak
+    </button>
+  </div>
+);
+})()}
+{itemSearchResult && itemSearchItems.length === 0 && (
+  <div className="mt-3 rounded border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
     {itemSearchResult}
+  </div>
+)}
+{itemSearchItems.length === 0 &&
+  itemSearchResult === "Geen kledingstuk gevonden met dit nummer." &&
+  itemSearchArticleId !== null &&
+  ["Presentatie jack", "Presentatie broek"].includes(
+    articleTypes.find(
+      (article) => article.id === itemSearchArticleId
+    )?.name ?? ""
+  ) && (
+    <>
+      <button
+        type="button"
+        onClick={() => setShowLooseFoundPartForm(true)}
+        className="mt-3 rounded bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+      >
+        Los gevonden onderdeel registreren
+      </button>
+
+      {showLooseFoundPartForm && (
+        <div className="mt-3 rounded border border-gray-200 bg-gray-50 p-3">
+          <label className="mb-1 block text-sm font-medium">
+            Maat
+          </label>
+
+          <select
+            value={looseFoundPartSizeId ?? ""}
+            onChange={(e) =>
+              setLooseFoundPartSizeId(
+                e.target.value ? Number(e.target.value) : null
+              )
+            }
+            className="w-full rounded border border-gray-300 px-3 py-2"
+          >
+            <option value="">Kies maat</option>
+
+            {sizes.map((size) => (
+              <option key={size.id} value={size.id}>
+                {size.name}
+              </option>
+            ))}
+          </select>
+<label className="mb-1 mt-3 block text-sm font-medium">
+  Conditie
+</label>
+
+<select
+  value={looseFoundPartCondition}
+  onChange={(e) =>
+    setLooseFoundPartCondition(
+      e.target.value as "good" | "damaged"
+    )
+  }
+  className="w-full rounded border border-gray-300 px-3 py-2"
+>
+  <option value="good">Goed</option>
+  <option value="damaged">Beschadigd</option>
+</select>
+<button
+  type="button"
+onClick={registerLooseFoundPresentationPart}
+  className="mt-3 rounded bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+>
+  Registreren
+</button>
+        </div>
+      )}
+    </>
+  )}
+{itemSearchItems.length > 0 && (
+  <div className="mt-4 overflow-x-auto rounded-lg border border-gray-200">
+    <table className="w-full text-left text-sm">
+      <thead className="bg-gray-50">
+        <tr>
+          <th className="px-4 py-3 font-medium text-gray-600">
+            Artikel
+          </th>
+          <th className="px-4 py-3 font-medium text-gray-600">
+            Nummer
+          </th>
+          <th className="px-4 py-3 font-medium text-gray-600">
+            Maat
+          </th>
+          <th className="px-4 py-3 font-medium text-gray-600">
+            Status
+          </th>
+          <th className="px-4 py-3 font-medium text-gray-600">
+            Conditie
+          </th>
+        </tr>
+      </thead>
+
+      <tbody>
+    {[...itemSearchItems]
+  .sort((a, b) => {
+    const articleA =
+      articleTypes.find((article) => article.id === a.article_type_id)?.name ?? "";
+
+    const articleB =
+      articleTypes.find((article) => article.id === b.article_type_id)?.name ?? "";
+
+    const articleCompare = articleA.localeCompare(articleB, "nl");
+
+    if (articleCompare !== 0) {
+      return articleCompare;
+    }
+
+    const numberCompare = (a.unique_number ?? "").localeCompare(
+      b.unique_number ?? "",
+      "nl",
+      { numeric: true }
+    );
+
+    if (numberCompare !== 0) {
+      return numberCompare;
+    }
+
+    const sizeA = sizes.find((size) => size.id === a.size_id)?.name ?? "";
+    const sizeB = sizes.find((size) => size.id === b.size_id)?.name ?? "";
+
+    return sizeA.localeCompare(sizeB, "nl", { numeric: true });
+  })
+  .map((item) => {
+          const article = articleTypes.find(
+            (article) => article.id === item.article_type_id
+          );
+
+          const size = sizes.find(
+            (size) => size.id === item.size_id
+          );
+
+          const statusLabels: Record<string, string> = {
+            available: "Beschikbaar",
+            issued: "Uitgegeven",
+            incomplete: "Incompleet",
+            damaged: "Beschadigd",
+            missing: "Vermist",
+            repair: "Reparatie",
+            retired: "Uit gebruik",
+          };
+
+          const conditionLabels: Record<string, string> = {
+            good: "Goed",
+            damaged: "Beschadigd",
+          };
+
+          return (
+           <tr
+  key={item.id}
+  onClick={() => {
+    setFoundItemId(item.id);
+
+    const article = articleTypes.find(
+      (article) => article.id === item.article_type_id
+    );
+
+    setFoundItemArticleName(article?.name ?? "");
+    setFoundItemMemberId(null);
+    setFoundItemPart("");
+    setShowFoundItemForm(false);
+  }}
+  className={`cursor-pointer border-t border-gray-100 ${
+    foundItemId === item.id
+      ? "bg-gray-200"
+      : "hover:bg-gray-50"
+  }`}
+>
+              <td className="px-4 py-3 text-gray-900">
+                {article?.name ?? "Onbekend kledingstuk"}
+              </td>
+
+              <td className="px-4 py-3 text-gray-600">
+                {item.unique_number ?? "-"}
+              </td>
+
+              <td className="px-4 py-3 text-gray-600">
+                {size?.name ?? "-"}
+              </td>
+
+              <td className="px-4 py-3 text-gray-600">
+                {statusLabels[item.status] ?? item.status}
+              </td>
+
+              <td className="px-4 py-3 text-gray-600">
+                {conditionLabels[item.condition] ?? item.condition}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   </div>
 )}
 {foundItemId !== null && (
