@@ -83,12 +83,16 @@ charge_amount: number | null;
 };
 type TeamBagDifference = {
   id: number;
-  bag_number: string | null;
+  team: string | null;
   missing_quantity: number | null;
+};
+type Team = {
+  id: number;
+  name: string;
+  active: boolean;
 };
 type TeamBag = {
   id: number;
-  bag_number: string;
   name: string;
   team_id: number;
   season_id: number;
@@ -130,6 +134,11 @@ const [newMemberPhone, setNewMemberPhone] = useState("");
   const [missingTotal, setMissingTotal] = useState(0);
   const [teamBagsWithShortage, setTeamBagsWithShortage] = useState(0);
 const [members, setMembers] = useState<MemberSummary[]>([]);
+const [teams, setTeams] = useState<Team[]>([]);
+const [newTeamName, setNewTeamName] = useState("");
+const [newTeamMessage, setNewTeamMessage] = useState("");
+const [newTeamMessageType, setNewTeamMessageType] =
+  useState<"success" | "error">("success");
 const [teamBags, setTeamBags] = useState<TeamBag[]>([]);
 const [teamBagContentMessage, setTeamBagContentMessage] = useState("");
 const [selectedTeamBagId, setSelectedTeamBagId] = useState<number | null>(null);
@@ -543,6 +552,64 @@ async function loadArticleTypes() {
 
   setArticleTypes((data ?? []) as ArticleType[]);
 }
+async function addTeam() {
+  setNewTeamMessage("");
+
+  if (!newTeamName.trim()) {
+    setNewTeamMessageType("error");
+    setNewTeamMessage("Vul eerst een teamnaam in.");
+    return;
+  }
+const existingTeam = teams.find(
+  (team) =>
+    team.name.toLowerCase() === newTeamName.trim().toLowerCase()
+);
+
+if (existingTeam) {
+  setNewTeamMessageType("error");
+  setNewTeamMessage(`${newTeamName.trim()} bestaat al.`);
+  return;
+}
+const { data: newTeam, error } = await supabase
+  .from("teams")
+  .insert({
+    name: newTeamName.trim(),
+    active: true,
+  })
+  .select("id, name, active")
+  .single();
+
+if (error) {
+  console.error("Fout bij aanmaken team:", error);
+  setNewTeamMessageType("error");
+  setNewTeamMessage("Team kon niet worden aangemaakt.");
+  return;
+}
+const { error: teamBagError } = await supabase
+  .from("team_bags")
+  .insert({
+    name: newTeam.name,
+    team_id: newTeam.id,
+    status: "in_stock",
+  });
+
+if (teamBagError) {
+  console.error("Fout bij aanmaken wedstrijdtas:", teamBagError);
+  setNewTeamMessageType("error");
+  setNewTeamMessage(
+    "Team is aangemaakt, maar de wedstrijdtas kon niet worden aangemaakt."
+  );
+  return;
+}
+setNewTeamMessageType("success");
+setNewTeamMessage(
+  `Team ${newTeam.name} en de bijbehorende wedstrijdtas zijn succesvol aangemaakt.`
+);
+
+setNewTeamName("");
+await loadDashboard();
+}
+
 async function issueTeamBag() {
  setTeamBagIssueMessage("");
 setTeamBagReturnMessage("");
@@ -1862,12 +1929,23 @@ setMembers(memberRows);
         0
       )
     );
+const { data: teamData, error: teamError } = await supabase
+  .from("teams")
+  .select("id, name, active")
+  .eq("active", true)
+  .order("name", { ascending: true });
+
+if (teamError) {
+  console.error("Fout bij laden teams:", teamError);
+} else {
+  setTeams((teamData ?? []) as Team[]);
+}
 const { data: teamBagData, error: teamBagError } = await supabase
   .from("team_bags")
-.select(
-  "id, bag_number, name, team_id, season_id, status, holder_name, holder_last_name, holder_mail, holder_phone, issued_at, returned_at"
-)
-.order("bag_number", { ascending: true });
+  .select(
+    "id, name, team_id, season_id, status, holder_name, holder_last_name, holder_mail, holder_phone, issued_at, returned_at"
+  )
+  .order("name", { ascending: true });
 if (teamBagError) {
   setMessage(
     "Teamtassen konden niet worden geladen: " + teamBagError.message
@@ -1896,7 +1974,7 @@ setTeamBagContents(
 );
     const { data: bags, error: bagsError } = await supabase
       .from("team_bag_stock_differences")
-      .select("id, bag_number, missing_quantity")
+     .select("id, team, missing_quantity")
       .gt("missing_quantity", 0);
 
     if (bagsError) {
@@ -1911,7 +1989,7 @@ setTeamBagContents(
 
     const uniqueBags = new Set(
       bagRows
-        .map((bag) => bag.bag_number)
+      .map((bag) => bag.team)
         .filter(
           (bagNumber): bagNumber is string =>
             bagNumber !== null && bagNumber !== ""
@@ -2855,20 +2933,57 @@ onClick={registerFoundItem}
   </div>
 )}
 {activeSection === "teamtassen" && (
-<div className="mt-8 overflow-hidden rounded-2xl bg-white shadow">
+  <div className="mt-8 space-y-6">
+<div className="overflow-hidden rounded-2xl bg-white shadow">
   <div className="border-b border-gray-200 px-6 py-4">
     <h2 className="text-xl font-bold text-gray-900">
-      Teamtassen
+      Nieuw team
     </h2>
   </div>
 
-  <div className="overflow-x-auto">
+  <div className="px-6 py-4">
+    <div className="flex items-center gap-3">
+      <input
+        type="text"
+        value={newTeamName}
+        onChange={(e) => setNewTeamName(e.target.value)}
+        placeholder="Teamnaam"
+        className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+      />
+
+      <button
+        type="button"
+        onClick={addTeam}
+        className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+      >
+        Team toevoegen
+      </button>
+    </div>
+
+    {newTeamMessage && (
+      <p
+        className={`mt-3 text-sm ${
+          newTeamMessageType === "success"
+            ? "text-green-600"
+            : "text-red-600"
+        }`}
+      >
+        {newTeamMessage}
+      </p>
+    )}
+  </div>
+</div>
+
+ <div className="overflow-hidden rounded-2xl bg-white shadow">
+<div className="border-b border-gray-200 px-6 py-4">
+  <h2 className="text-xl font-bold text-gray-900">
+    Teamtassen
+  </h2>
+</div>
+ <div className="overflow-x-auto">
     <table className="w-full text-left">
       <thead className="bg-gray-50">
         <tr>
-          <th className="px-6 py-3 text-sm font-medium text-gray-600">
-            Tasnummer
-          </th>
           <th className="px-6 py-3 text-sm font-medium text-gray-600">
             Naam
           </th>
@@ -2905,19 +3020,17 @@ onClick={registerFoundItem}
 }}
   className="cursor-pointer border-b border-gray-100 hover:bg-gray-50"
 >
-            <td className="px-6 py-4 text-gray-900">
-              {bag.bag_number}
-            </td>
-
             <td className="px-6 py-4 text-gray-600">
               {bag.name}
             </td>
 
             <td className="px-6 py-4 text-gray-600">
-              {bag.status === "issued"
+{bag.status === "issued"
   ? "Uitgegeven"
   : bag.status === "returned"
   ? "Ingenomen"
+  : bag.status === "in_stock"
+  ? "Beschikbaar"
   : bag.status}
             </td>
           </tr>
@@ -2925,16 +3038,13 @@ onClick={registerFoundItem}
       </tbody>
     </table>
   </div>
+  </div>
 {selectedTeamBagId !== null && (
   <div className="border-t border-gray-200 px-6 py-4">
-   <h3 className="font-bold text-gray-900">
-  Inhoud teamtas{" "}
-  {teamBags.find((bag) => bag.id === selectedTeamBagId)?.bag_number}
-</h3>
-
-<p className="mt-1 text-sm text-gray-600">
+<h3 className="font-bold text-gray-900">
+  Inhoud wedstrijdtas{" "}
   {teamBags.find((bag) => bag.id === selectedTeamBagId)?.name}
-</p>
+</h3>
 {(() => {
   const selectedBag = teamBags.find(
     (bag) => bag.id === selectedTeamBagId
