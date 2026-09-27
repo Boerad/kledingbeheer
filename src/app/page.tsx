@@ -114,6 +114,17 @@ type TeamBagContent = {
   damaged_quantity: number;
 
 };
+type TeamBagContentHistory = {
+  id: number;
+  team_bag_id: number;
+  article_type_id: number;
+  old_size_id: number | null;
+  new_size_id: number | null;
+  quantity: number;
+  change_type: string;
+  reason: string | null;
+  created_at: string;
+};
 export default function Home() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -163,6 +174,19 @@ const [teamBagContents, setTeamBagContents] = useState<TeamBagContent[]>([]);
 const [newBagArticleId, setNewBagArticleId] = useState<number | null>(5);
 const [newBagSizeId, setNewBagSizeId] = useState<number | null>(null);
 const [newBagQuantity, setNewBagQuantity] = useState(1);
+const [teamBagChangeContentId, setTeamBagChangeContentId] =
+  useState<number | null>(null);
+const [teamBagChangeNewSizeId, setTeamBagChangeNewSizeId] =
+  useState<number | null>(null);
+const [teamBagChangeQuantity, setTeamBagChangeQuantity] = useState(1);
+const [teamBagChangeReason, setTeamBagChangeReason] = useState("");
+const [teamBagChangeMessage, setTeamBagChangeMessage] = useState("");
+const [showTeamBagChangeHistory, setShowTeamBagChangeHistory] =
+  useState(false);
+const [teamBagContentHistory, setTeamBagContentHistory] =
+  useState<TeamBagContentHistory[]>([]);
+const [teamBagChangeMessageType, setTeamBagChangeMessageType] =
+  useState<"success" | "error">("success");
 const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
 const [activeSection, setActiveSection] = useState<string>("overzicht");
 const [itemSearchNumber, setItemSearchNumber] = useState("");
@@ -690,7 +714,7 @@ if (newBagSizeId === null) {
     return;
   }
 
-  setNewBagArticleId(5);
+ setNewBagArticleId(null);
   setNewBagSizeId(null);
   setNewBagQuantity(1);
 
@@ -698,6 +722,106 @@ if (newBagSizeId === null) {
 
   setTeamBagContentMessage(
     "Kledingstuk is succesvol aan de teamtas toegevoegd."
+  );
+}
+async function changeTeamBagSize() {
+  setTeamBagChangeMessage("");
+
+  if (selectedTeamBagId === null) {
+    setTeamBagChangeMessageType("error");
+    setTeamBagChangeMessage("Geen teamtas geselecteerd.");
+    return;
+  }
+
+  if (teamBagChangeContentId === null) {
+    setTeamBagChangeMessageType("error");
+    setTeamBagChangeMessage("Kies eerst welk kledingstuk je wilt wisselen.");
+    return;
+  }
+
+  if (teamBagChangeNewSizeId === null) {
+    setTeamBagChangeMessageType("error");
+    setTeamBagChangeMessage("Kies eerst de nieuwe maat.");
+    return;
+  }
+
+  if (teamBagChangeQuantity <= 0) {
+    setTeamBagChangeMessageType("error");
+    setTeamBagChangeMessage("Het aantal moet groter zijn dan 0.");
+    return;
+  }
+
+  const currentContent = teamBagContents.find(
+    (item) => item.id === teamBagChangeContentId
+  );
+
+  if (!currentContent) {
+    setTeamBagChangeMessageType("error");
+    setTeamBagChangeMessage("De gekozen inhoud is niet gevonden.");
+    return;
+  }
+
+  if (currentContent.size_id === null) {
+    setTeamBagChangeMessageType("error");
+    setTeamBagChangeMessage("Dit kledingstuk heeft geen maat.");
+    return;
+  }
+
+  if (currentContent.size_id === teamBagChangeNewSizeId) {
+    setTeamBagChangeMessageType("error");
+    setTeamBagChangeMessage("Kies een andere maat dan de huidige maat.");
+    return;
+  }
+
+  const { error } = await supabase.rpc("change_team_bag_size", {
+    p_team_bag_id: selectedTeamBagId,
+    p_article_type_id: currentContent.article_type_id,
+    p_old_size_id: currentContent.size_id,
+    p_new_size_id: teamBagChangeNewSizeId,
+    p_quantity: teamBagChangeQuantity,
+    p_reason: teamBagChangeReason.trim() || null,
+  });
+
+  if (error) {
+    console.error("Fout bij maatwissel teamtas:", error);
+    setTeamBagChangeMessageType("error");
+    setTeamBagChangeMessage(
+      "Maatwissel kon niet worden opgeslagen: " + error.message
+    );
+    return;
+  }
+
+  setTeamBagChangeContentId(null);
+  setTeamBagChangeNewSizeId(null);
+  setTeamBagChangeQuantity(1);
+  setTeamBagChangeReason("");
+setTeamBagReturnActual({});
+setTeamBagReturnDamaged({});
+  await loadDashboard();
+
+  setTeamBagChangeMessageType("success");
+  setTeamBagChangeMessage("Maatwissel is succesvol opgeslagen.");
+}
+async function loadTeamBagContentHistory() {
+  if (selectedTeamBagId === null) {
+    setTeamBagContentHistory([]);
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("team_bag_content_history")
+    .select("*")
+    .eq("team_bag_id", selectedTeamBagId)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("Fout bij laden wijzigingshistorie:", error);
+    setTeamBagContentHistory([]);
+    return;
+  }
+
+  setTeamBagContentHistory(
+    (data ?? []) as TeamBagContentHistory[]
   );
 }
 async function removeTeamBagContent() {
@@ -919,6 +1043,69 @@ if (historyError) {
   setTeamBagReturnMessage("Teamtas is succesvol ingenomen.");
 
   await loadDashboard();
+}
+async function saveAwayBagCheck() {
+  setTeamBagReturnMessage("");
+
+  if (selectedTeamBagId === null) {
+    setTeamBagReturnMessage("Kies eerst een uittenuetas.");
+    return;
+  }
+
+  const selectedBag = teamBags.find(
+    (bag) => bag.id === selectedTeamBagId
+  );
+
+  if (!selectedBag || selectedBag.team_id !== null) {
+    setTeamBagReturnMessage("De geselecteerde tas is geen uittenuetas.");
+    return;
+  }
+
+  const contents = teamBagContents.filter(
+    (item) => item.team_bag_id === selectedTeamBagId
+  );
+
+  for (const item of contents) {
+    const actualQuantity =
+      teamBagReturnActual[item.id] ?? item.actual_quantity;
+
+    const damagedQuantity =
+      teamBagReturnDamaged[item.id] ?? item.damaged_quantity;
+
+    if (
+      actualQuantity < 0 ||
+      actualQuantity > item.expected_quantity ||
+      damagedQuantity < 0 ||
+      damagedQuantity > actualQuantity
+    ) {
+      setTeamBagReturnMessage(
+        "Controleer de aantallen. Aanwezig kan niet hoger zijn dan verwacht en beschadigd kan niet hoger zijn dan aanwezig."
+      );
+      return;
+    }
+
+    const { error } = await supabase
+      .from("team_bag_contents")
+      .update({
+        actual_quantity: actualQuantity,
+        damaged_quantity: damagedQuantity,
+      })
+      .eq("id", item.id);
+
+    if (error) {
+      setTeamBagReturnMessage(
+        "Controle van de uittenuetas kon niet worden opgeslagen: " +
+          error.message
+      );
+      return;
+    }
+  }
+
+  await loadDashboard();
+
+  setTeamBagReturnMessage(
+    "Controle van de uittenuetas is succesvol opgeslagen."
+  );
 }
 async function addMember() {
   setMessage("");
@@ -2984,17 +3171,19 @@ onClick={registerFoundItem}
     <table className="w-full text-left">
       <thead className="bg-gray-50">
         <tr>
-          <th className="px-6 py-3 text-sm font-medium text-gray-600">
-            Naam
-          </th>
-          <th className="px-6 py-3 text-sm font-medium text-gray-600">
-            Status
-          </th>
+       <th className="w-1/2 px-6 py-3 text-sm font-medium text-gray-600">
+  Naam
+</th>
+<th className="w-1/2 px-6 py-3 text-sm font-medium text-gray-600">
+  Status
+</th>
         </tr>
       </thead>
 
       <tbody>
-        {teamBags.map((bag) => (
+     {teamBags
+  .filter((bag) => bag.team_id !== null)
+  .map((bag) => (
       <tr
   key={bag.id}
   onClick={() => {
@@ -3039,8 +3228,10 @@ onClick={registerFoundItem}
     </table>
   </div>
   </div>
-{selectedTeamBagId !== null && (
-  <div className="border-t border-gray-200 px-6 py-4">
+
+{selectedTeamBagId !== null &&
+  teamBags.find((bag) => bag.id === selectedTeamBagId)?.team_id !== null && (
+  <div className="mt-4 rounded-2xl bg-white p-6 shadow">
 <h3 className="font-bold text-gray-900">
   Inhoud wedstrijdtas{" "}
   {teamBags.find((bag) => bag.id === selectedTeamBagId)?.name}
@@ -3116,6 +3307,9 @@ onClick={registerFoundItem}
         <th className="px-4 py-3 text-sm font-medium text-gray-600">
           Beschadigd
         </th>
+<th className="px-4 py-3 text-sm font-medium text-gray-600">
+  Maatwissel
+</th>
       </tr>
     </thead>
 
@@ -3194,11 +3388,235 @@ onClick={registerFoundItem}
     className="w-20 rounded-lg border border-gray-300 px-2 py-1"
   />
 </td>
+<td className="px-4 py-3">
+  <button
+    type="button"
+    onClick={() => {
+      setTeamBagChangeContentId(item.id);
+      setTeamBagChangeNewSizeId(null);
+      setTeamBagChangeQuantity(1);
+      setTeamBagChangeReason("");
+      setTeamBagChangeMessage("");
+    }}
+  className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+  >
+    Wisselen
+  </button>
+</td>
             </tr>
           );
         })}
     </tbody>
   </table>
+</div>
+{teamBags.find((bag) => bag.id === selectedTeamBagId)?.team_id !== null && (
+ <div className="mt-6 border-t border-gray-200 pt-4">
+<div className="flex items-center justify-between gap-4">
+  <h3 className="font-bold text-gray-900">
+    Maatwissel
+  </h3>
+
+  <button
+    type="button"
+onClick={async () => {
+  await loadTeamBagContentHistory();
+  setShowTeamBagChangeHistory(true);
+}}
+    className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+  >
+    Wijzigingshistorie
+  </button>
+</div>
+{showTeamBagChangeHistory && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div className="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-xl">
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-xl font-bold text-gray-900">
+          Wijzigingshistorie
+        </h2>
+
+        <button
+          type="button"
+          onClick={() => setShowTeamBagChangeHistory(false)}
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+        >
+          Sluiten
+        </button>
+      </div>
+
+   {teamBagContentHistory.length === 0 ? (
+  <p className="mt-4 text-sm text-gray-600">
+    Voor deze wedstrijdtas zijn nog geen wijzigingen opgeslagen.
+  </p>
+) : (
+  <div className="mt-4 overflow-x-auto">
+    <table className="w-full text-left">
+      <thead className="bg-gray-50">
+        <tr>
+          <th className="px-4 py-3 text-sm font-medium text-gray-600">
+            Kledingstuk
+          </th>
+          <th className="px-4 py-3 text-sm font-medium text-gray-600">
+            Wijziging
+          </th>
+          <th className="px-4 py-3 text-sm font-medium text-gray-600">
+            Aantal
+          </th>
+          <th className="px-4 py-3 text-sm font-medium text-gray-600">
+            Reden
+          </th>
+          <th className="px-4 py-3 text-sm font-medium text-gray-600">
+            Datum
+          </th>
+        </tr>
+      </thead>
+
+      <tbody>
+        {teamBagContentHistory.map((historyItem) => {
+          const article = articleTypes.find(
+            (article) => article.id === historyItem.article_type_id
+          );
+
+          const oldSize = sizes.find(
+            (size) => size.id === historyItem.old_size_id
+          );
+
+          const newSize = sizes.find(
+            (size) => size.id === historyItem.new_size_id
+          );
+
+          return (
+            <tr
+              key={historyItem.id}
+              className="border-b border-gray-100"
+            >
+              <td className="px-4 py-3">
+                {article?.name ?? "Onbekend kledingstuk"}
+              </td>
+
+              <td className="px-4 py-3">
+                {oldSize?.name ?? "-"} → {newSize?.name ?? "-"}
+              </td>
+
+              <td className="px-4 py-3">
+                {historyItem.quantity}
+              </td>
+
+              <td className="px-4 py-3">
+                {historyItem.reason || "-"}
+              </td>
+
+              <td className="px-4 py-3">
+                {new Date(historyItem.created_at).toLocaleString("nl-NL")}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+)}
+    </div>
+  </div>
+)}
+<p className="mt-1 text-sm text-gray-600">
+  Wijzig één of meerdere kledingstukken naar een andere maat.
+  De wijziging wordt opgeslagen in de historie.
+</p>
+{teamBagChangeContentId !== null && (() => {
+  const selectedContent = teamBagContents.find(
+    (item) => item.id === teamBagChangeContentId
+  );
+
+  const selectedArticle = articleTypes.find(
+    (article) => article.id === selectedContent?.article_type_id
+  );
+
+  const selectedSize = sizes.find(
+    (size) => size.id === selectedContent?.size_id
+  );
+
+  if (!selectedContent) {
+    return null;
+  }
+
+  return (
+  <div>
+<p className="mt-3 text-sm font-bold text-gray-600">
+      Gekozen: {selectedArticle?.name ?? "Onbekend kledingstuk"} – huidige maat{" "}
+      {selectedSize?.name ?? "-"}
+    </p>
+
+    <select
+      value={teamBagChangeNewSizeId ?? ""}
+      onChange={(e) =>
+        setTeamBagChangeNewSizeId(
+          e.target.value ? Number(e.target.value) : null
+        )
+      }
+      className="mt-3 rounded-lg border border-gray-300 px-3 py-2"
+    >
+      <option value="">Nieuwe maat kiezen</option>
+      {sizes
+        .filter((size) => size.id !== selectedContent.size_id)
+        .map((size) => (
+          <option key={size.id} value={size.id}>
+            {size.name}
+          </option>
+        ))}
+    </select>
+<input
+  type="number"
+  min="1"
+  max={Math.min(
+    selectedContent.expected_quantity,
+    selectedContent.actual_quantity
+  )}
+  value={teamBagChangeQuantity}
+onChange={(e) => {
+  const maxQuantity = Math.min(
+    selectedContent.expected_quantity,
+    selectedContent.actual_quantity
+  );
+
+  const newQuantity = Number(e.target.value);
+
+  setTeamBagChangeQuantity(
+    Math.max(1, Math.min(newQuantity, maxQuantity))
+  );
+}}
+  className="ml-2 w-20 rounded-lg border border-gray-300 px-3 py-2"
+/>
+<input
+  type="text"
+  value={teamBagChangeReason}
+  onChange={(e) => setTeamBagChangeReason(e.target.value)}
+  placeholder="Reden (optioneel)"
+  className="ml-2 rounded-lg border border-gray-300 px-3 py-2"
+/>
+<button
+  type="button"
+  onClick={changeTeamBagSize}
+  className="ml-2 rounded-lg bg-gray-900 px-4 py-2 font-medium text-white"
+>
+  Wissel uitvoeren
+</button>
+  </div>
+);
+})()}
+{teamBagChangeMessage && (
+  <div
+    className={`mt-2 text-sm ${
+      teamBagChangeMessageType === "success"
+        ? "text-green-600"
+        : "text-red-600"
+    }`}
+  >
+    {teamBagChangeMessage}
+  </div>
+)}
+</div>
+)}
 <h3 className="mt-4 text-sm font-bold text-gray-900">
   Nieuwe kleding toevoegen of innemen
 </h3>
@@ -3278,10 +3696,10 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
   </p>
 )}
 </div>
-</div> 
+{teamBags.find((bag) => bag.id === selectedTeamBagId)?.status !== "issued" && (
 <div className="mt-6 border-t border-gray-200 pt-4">
   <h3 className="font-bold text-gray-900">
-    Tas uitgegeven aan
+    Tas uitgeven aan
   </h3>
 
   <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -3331,75 +3749,342 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
       : "text-red-600"
   }`}
 >
-    {teamBagIssueMessage}
+{teamBagIssueMessage}
+</div>
+)}
+</div>
+</div>
+)}
+{teamBags.find((bag) => bag.id === selectedTeamBagId)?.status === "issued" && (
+  <div className="mt-6 border-t border-gray-200 pt-4">
+    <h3 className="font-bold text-gray-900">
+      Tas innemen
+    </h3>
+
+    <div className="mt-3 flex flex-wrap items-center gap-3">
+      <select
+        value={teamBagChargeStatus}
+        onChange={(e) =>
+          setTeamBagChargeStatus(
+            e.target.value as "no_charge" | "charged" | ""
+          )
+        }
+        className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700"
+      >
+        <option value="">Financiële afhandeling</option>
+        <option value="no_charge">Geen kosten</option>
+        <option value="charged">In rekening gebracht</option>
+      </select>
+
+      {teamBagChargeStatus === "charged" && (
+        <select
+          value={teamBagPaymentStatus}
+          onChange={(e) =>
+            setTeamBagPaymentStatus(
+              e.target.value as "paid" | "refused" | ""
+            )
+          }
+          className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700"
+        >
+          <option value="">Betaling</option>
+          <option value="paid">Betaald</option>
+          <option value="refused">Betaling geweigerd</option>
+        </select>
+      )}
+
+      {teamBagChargeStatus === "charged" && (
+        <input
+          type="text"
+          inputMode="decimal"
+          placeholder="Bedrag €"
+          value={
+            teamBagChargeAmount ||
+            teamBagCalculatedChargeAmount.toFixed(2).replace(".", ",")
+          }
+          onChange={(e) => setTeamBagChargeAmount(e.target.value)}
+          className="w-28 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700"
+        />
+      )}
+
+      <button
+        type="button"
+        onClick={returnTeamBag}
+        className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+      >
+        Tas innemen
+      </button>
+    </div>
+
+    {teamBagReturnMessage && (
+      <div
+        className={`mt-2 text-sm ${
+          teamBagReturnMessage.includes("succesvol")
+            ? "text-green-600"
+            : "text-red-600"
+        }`}
+      >
+        {teamBagReturnMessage}
+      </div>
+    )}
   </div>
 )}
-<div className="mt-4 w-full border-t border-gray-200 pt-4">
-<select
-  value={teamBagChargeStatus}
-  onChange={(e) =>
-    setTeamBagChargeStatus(
-      e.target.value as "no_charge" | "charged" | ""
-    )
-  }
-  className="mr-2 rounded-lg border border-gray-300 px-2 py-2 text-sm text-gray-700"
->
-  <option value="">Financiële afhandeling</option>
-  <option value="no_charge">Geen kosten</option>
-  <option value="charged">In rekening gebracht</option>
-</select>
-{teamBagChargeStatus === "charged" && (
-  <select
-value={teamBagPaymentStatus}
-onChange={(e) =>
-  setTeamBagPaymentStatus(
-    e.target.value as "paid" | "refused" | ""
-  )
-}
-    className="mr-2 rounded-lg border border-gray-300 px-2 py-2 text-sm text-gray-700"
-  >
-    <option value="">Betaling</option>
-    <option value="paid">Betaald</option>
-    <option value="refused">Betaling geweigerd</option>
-  </select>
+</div>
 )}
-{teamBagChargeStatus === "charged" && (
+<div className="mt-8 overflow-hidden rounded-2xl bg-white shadow">
+  <div className="border-b border-gray-200 px-6 py-4">
+    <h2 className="text-xl font-bold text-gray-900">
+      Uittenuetassen
+    </h2>
+  </div>
+
+  <div className="overflow-x-auto">
+    <table className="w-full text-left">
+      <thead className="bg-gray-50">
+        <tr>
+          <th className="w-1/2 px-6 py-3 text-sm font-medium text-gray-600">
+  Naam
+</th>
+<th className="w-1/2 px-6 py-3 text-sm font-medium text-gray-600">
+  Status
+</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        {teamBags
+          .filter((bag) => bag.team_id === null)
+          .map((bag) => (
+            <tr
+              key={bag.id}
+              onClick={() => {
+                setSelectedTeamBagId(bag.id);
+
+                const contents = teamBagContents.filter(
+                  (item) => item.team_bag_id === bag.id
+                );
+
+                setTeamBagReturnActual(
+                  Object.fromEntries(
+                    contents.map((item) => [item.id, item.actual_quantity])
+                  )
+                );
+
+                setTeamBagReturnDamaged(
+                  Object.fromEntries(
+                    contents.map((item) => [item.id, item.damaged_quantity])
+                  )
+                );
+
+                setTeamBagReturnMessage("");
+              }}
+              className="cursor-pointer border-b border-gray-100 hover:bg-gray-50"
+            >
+              <td className="px-6 py-4 text-gray-600">
+                {bag.name.replace("Uittenuetas - ", "")}
+              </td>
+
+              <td className="px-6 py-4 text-gray-600">
+                {bag.status === "issued"
+                  ? "Uitgegeven"
+                  : bag.status === "returned"
+                  ? "Ingenomen"
+                  : bag.status === "in_stock"
+                  ? "Beschikbaar"
+                  : bag.status}
+              </td>
+            </tr>
+          ))}
+      </tbody>
+    </table>
+  </div>
+</div>
+{selectedTeamBagId !== null &&
+  teamBags.find((bag) => bag.id === selectedTeamBagId)?.team_id === null && (
+    <div className="mt-4 rounded-2xl bg-white p-6 shadow">
+      <h3 className="font-bold text-gray-900">
+        Inhoud uittenuetas{" "}
+        {teamBags
+          .find((bag) => bag.id === selectedTeamBagId)
+          ?.name.replace("Uittenuetas - ", "")}
+      </h3>
+
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full text-left">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-3 text-sm font-medium text-gray-600">
+                Kledingstuk
+              </th>
+              <th className="px-4 py-3 text-sm font-medium text-gray-600">
+                Maat
+              </th>
+              <th className="px-4 py-3 text-sm font-medium text-gray-600">
+  Verwacht
+</th>
+<th className="px-4 py-3 text-sm font-medium text-gray-600">
+  Aanwezig
+</th>
+<th className="px-4 py-3 text-sm font-medium text-gray-600">
+  Beschadigd
+</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {teamBagContents
+              .filter((item) => item.team_bag_id === selectedTeamBagId)
+              .map((item) => {
+                const article = articleTypes.find(
+                  (article) => article.id === item.article_type_id
+                );
+                const size = sizes.find(
+                  (size) => size.id === item.size_id
+                );
+
+                return (
+                  <tr
+                    key={item.id}
+                    className="border-b border-gray-100"
+                  >
+                    <td className="px-4 py-3 text-gray-600">
+                      {article?.name ?? "-"}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">
+                      {size?.name ?? "-"}
+                    </td>
+                   <td className="px-4 py-3 text-gray-600">
+  {item.expected_quantity}
+</td>
+<td className="px-4 py-3 text-gray-600">
   <input
-    type="text"
-    inputMode="decimal"
-    placeholder="Bedrag €"
+    type="number"
+    min="0"
+    max={item.expected_quantity}
     value={
-  teamBagChargeAmount ||
-  teamBagCalculatedChargeAmount.toFixed(2).replace(".", ",")
-}
-    onChange={(e) => setTeamBagChargeAmount(e.target.value)}
-    className="mr-2 w-28 rounded-lg border border-gray-300 px-2 py-2 text-sm text-gray-700"
+      teamBagReturnActual[item.id] ??
+      item.actual_quantity
+    }
+    onChange={(e) =>
+      setTeamBagReturnActual((current) => ({
+        ...current,
+        [item.id]: Number(e.target.value),
+      }))
+    }
+    className="w-20 rounded-lg border border-gray-300 px-3 py-2"
   />
-)}
+</td>
+<td className="px-4 py-3 text-gray-600">
+  <input
+    type="number"
+    min="0"
+    max={item.expected_quantity}
+    value={
+      teamBagReturnDamaged[item.id] ??
+      item.damaged_quantity
+    }
+    onChange={(e) =>
+      setTeamBagReturnDamaged((current) => ({
+        ...current,
+        [item.id]: Number(e.target.value),
+      }))
+    }
+    className="w-20 rounded-lg border border-gray-300 px-3 py-2"
+  />
+</td>
+                  </tr>
+                );
+              })}
+          </tbody>
+        </table>
+      </div>
+<div className="mt-4 border-t border-gray-200 pt-4">
+  <h4 className="text-sm font-bold text-gray-900">
+    Vaste inhoud toevoegen
+  </h4>
+
+  <div className="mt-3 flex flex-wrap items-center gap-3">
+    <select
+      value={newBagArticleId ?? ""}
+      onChange={(e) =>
+        setNewBagArticleId(
+          e.target.value ? Number(e.target.value) : null
+        )
+      }
+      className="rounded-lg border border-gray-300 px-3 py-2"
+    >
+      <option value="">Kledingstuk</option>
+      {articleTypes
+        .filter(
+          (article) =>
+            article.name === "Uitwedstrijdshirt" ||
+            article.name === "Uitwedstrijdbroek"
+        )
+        .map((article) => (
+          <option key={article.id} value={article.id}>
+            {article.name}
+          </option>
+        ))}
+    </select>
+
+    <select
+      value={newBagSizeId ?? ""}
+      onChange={(e) =>
+        setNewBagSizeId(
+          e.target.value ? Number(e.target.value) : null
+        )
+      }
+      className="rounded-lg border border-gray-300 px-3 py-2"
+    >
+      <option value="">Maat</option>
+      {sizes.map((size) => (
+        <option key={size.id} value={size.id}>
+          {size.name}
+        </option>
+      ))}
+    </select>
+
+    <input
+      type="number"
+      min="1"
+      value={newBagQuantity}
+      onChange={(e) =>
+        setNewBagQuantity(Number(e.target.value))
+      }
+      className="w-24 rounded-lg border border-gray-300 px-3 py-2"
+    />
 <button
+  type="button"
+  onClick={addTeamBagContent}
+  className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+>
+  Toevoegen
+</button>
+  </div>
+<div className="mt-4 border-t border-gray-200 pt-4">
+  <button
     type="button"
-    onClick={returnTeamBag}
+    onClick={saveAwayBagCheck}
     className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
   >
-    Tas innemen
+    Controle opslaan
   </button>
 
   {teamBagReturnMessage && (
-  <div
-  className={`mt-2 text-sm ${
-    teamBagReturnMessage.includes("succesvol")
-      ? "text-green-600"
-      : "text-red-600"
-  }`}
->
+    <div
+      className={`mt-2 text-sm ${
+        teamBagReturnMessage.includes("succesvol")
+          ? "text-green-600"
+          : "text-red-600"
+      }`}
+    >
       {teamBagReturnMessage}
     </div>
   )}
 </div>
-  </div>
 </div>
- </div>
-)}
+
+    </div>
+  )}
 </div>
 )}
 {activeSection === "personen" && (<>
