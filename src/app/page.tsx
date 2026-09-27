@@ -1017,8 +1017,10 @@ if (historyError) {
  .update({
   status: "returned",
   returned_at: returnedAt,
-  charge_status:
-    teamBagChargeStatus === "charged"
+ charge_status:
+  calculatedChargeAmount === 0
+    ? "no_charge"
+    : teamBagChargeStatus === "charged"
       ? teamBagPaymentStatus
       : teamBagChargeStatus,
   charge_amount:
