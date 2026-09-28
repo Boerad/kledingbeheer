@@ -44,6 +44,12 @@ type FoundItem = {
   status: string;
   returned_at: string | null;
   notification_sent_at: string | null;
+ individual_items: {
+  id: number;
+  unique_number: string | null;
+  article_type_id: number;
+  size_id: number | null;
+} | null;
 };
 type Size = {
   id: number;
@@ -125,6 +131,51 @@ type TeamBagContentHistory = {
   reason: string | null;
   created_at: string;
 };
+type SortDirection = "asc" | "desc";
+type TableSort = { key: string; direction: SortDirection };
+
+type SortableThProps = {
+  label: string;
+  sortKey: string;
+  sort?: TableSort;
+  onSort: (key: string) => void;
+  className?: string;
+};
+
+function SortableTh({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  className = "",
+}: SortableThProps) {
+  const indicator =
+    sort?.key === sortKey ? (sort.direction === "asc" ? " ↑" : " ↓") : "";
+
+  return (
+    <th className={className}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className="inline-flex cursor-pointer select-none items-center gap-1 font-medium hover:text-gray-900"
+        title={`Sorteer op ${label}`}
+      >
+        {label}{indicator}
+      </button>
+    </th>
+  );
+}
+
+function compareSortValues(a: string | number | null | undefined, b: string | number | null | undefined) {
+  const aEmpty = a === null || a === undefined || a === "" || a === "-";
+  const bEmpty = b === null || b === undefined || b === "" || b === "-";
+  if (aEmpty && bEmpty) return 0;
+  if (aEmpty) return 1;
+  if (bEmpty) return -1;
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  return String(a).localeCompare(String(b), "nl", { numeric: true, sensitivity: "base" });
+}
+
 export default function Home() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -199,6 +250,7 @@ const [looseFoundPartCondition, setLooseFoundPartCondition] =
   useState<"good" | "damaged">("good");
 const [foundItemId, setFoundItemId] = useState<number | null>(null);
 const [foundItemMemberId, setFoundItemMemberId] = useState<number | null>(null);
+const [foundItemMemberName, setFoundItemMemberName] = useState<string>("");
 const [foundItemPart, setFoundItemPart] = useState("");
 const [foundItemArticleName, setFoundItemArticleName] = useState("");
 const [foundItemLocation, setFoundItemLocation] = useState("");
@@ -207,6 +259,34 @@ const [foundItemMessage, setFoundItemMessage] = useState("");
 const [foundItemMessageType, setFoundItemMessageType] =
   useState<"success" | "error">("success");
 const [foundItems, setFoundItems] = useState<FoundItem[]>([]);
+const [tableSorts, setTableSorts] = useState<Record<string, TableSort>>({});
+
+function toggleTableSort(tableId: string, key: string) {
+  setTableSorts((current) => {
+    const previous = current[tableId];
+    return {
+      ...current,
+      [tableId]: {
+        key,
+        direction:
+          previous?.key === key && previous.direction === "asc" ? "desc" : "asc",
+      },
+    };
+  });
+}
+
+function sortedRows<T>(
+  tableId: string,
+  rows: T[],
+  getValue: (row: T, key: string) => string | number | null | undefined
+) {
+  const sort = tableSorts[tableId];
+  if (!sort) return rows;
+  return [...rows].sort((a, b) => {
+    const result = compareSortValues(getValue(a, sort.key), getValue(b, sort.key));
+    return sort.direction === "asc" ? result : -result;
+  });
+}
 const [showFoundItemForm, setShowFoundItemForm] = useState(false);
 const [memberSearch, setMemberSearch] = useState("");
 const [memberSort, setMemberSort] =
@@ -1308,6 +1388,7 @@ setItemSearchItems([]);
 setFoundItemMessage("");
 setFoundItemId(null);
 setFoundItemMemberId(null);
+setFoundItemMemberName("");
 setFoundItemPart("");
 
   let query = supabase
@@ -1346,30 +1427,40 @@ const visibleItems = items.filter((item) => {
 setItemSearchItems(visibleItems);
 
 const { data: assignments, error: assignmentError } = await supabase
-  .from("current_item_assignments")
-  .select("member_id, first_name, last_name, article, unique_number, size")
-  .eq("unique_number", searchNumber);
+  .from("item_assignments")
+  .select("id, individual_item_id, member_id, returned_date, created_at")
+  .in("individual_item_id", items.map((item) => item.id))
+  .is("returned_date", null)
+  .order("created_at", { ascending: false });
 
 if (assignmentError) {
   setItemSearchResult("Uitgiftegegevens konden niet worden opgezocht.");
   return;
 }
+
 if (items.length === 1) {
   const foundItem = items[0];
-
   const foundArticle = articleTypes.find(
     (article) => article.id === foundItem.article_type_id
   );
-setFoundItemArticleName(foundArticle?.name ?? "");
+
+  setFoundItemArticleName(foundArticle?.name ?? "");
+  setFoundItemId(foundItem.id);
 
   const foundAssignment = assignments?.find(
-    (assignment) =>
-      assignment.unique_number === searchNumber &&
-      assignment.article === foundArticle?.name
+    (assignment) => assignment.individual_item_id === foundItem.id
   );
 
-  setFoundItemId(foundItem.id);
+  const foundMember = foundAssignment
+    ? members.find((member) => member.member_id === foundAssignment.member_id)
+    : null;
+
+  const foundMemberName = foundMember
+    ? `${foundMember.first_name ?? ""} ${foundMember.last_name ?? ""}`.trim()
+    : "";
+
   setFoundItemMemberId(foundAssignment?.member_id ?? null);
+  setFoundItemMemberName(foundMemberName);
 }
 
 const results = items.map((item) => {
@@ -1381,11 +1472,9 @@ const results = items.map((item) => {
     (size) => size.id === item.size_id
   );
 
- const assignment = assignments?.find(
-  (assignment) =>
-    assignment.unique_number === searchNumber &&
-    assignment.article === article?.name
-);
+  const assignment = assignments?.find(
+    (assignment) => assignment.individual_item_id === item.id
+  );
 
   if (assignment) {
     const member = members.find(
@@ -1396,14 +1485,14 @@ const results = items.map((item) => {
       ? `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim()
       : "Onbekende persoon";
 
-return `${article?.name ?? "Onbekend kledingstuk"} | Nummer: ${
-  item.unique_number ?? "-"
-} | Maat: ${size?.name ?? "-"} | Uitgegeven aan: ${memberName}`;
+    return `${article?.name ?? "Onbekend kledingstuk"} | Nummer: ${
+      item.unique_number ?? "-"
+    } | Maat: ${size?.name ?? "-"} | Uitgegeven aan: ${memberName}`;
   }
 
-return `${article?.name ?? "Onbekend kledingstuk"} | Nummer: ${
-  item.unique_number ?? "-"
-} | Maat: ${size?.name ?? "-"} | Niet uitgegeven`;
+  return `${article?.name ?? "Onbekend kledingstuk"} | Nummer: ${
+    item.unique_number ?? "-"
+  } | Maat: ${size?.name ?? "-"} | Niet uitgegeven`;
 });
 
 setItemSearchResult(results.join("\n"));
@@ -1478,10 +1567,11 @@ setLooseFoundPartCondition("good");
 setShowLooseFoundPartForm(false);
 }
 async function registerFoundItem() {
-let memberIdForFoundItem = foundItemMemberId;
-let presentationCounterpartName: string | null = null;
+  let memberIdForFoundItem = foundItemMemberId;
+  let presentationCounterpartName: string | null = null;
 
   if (foundItemId === null) {
+    setFoundItemMessageType("error");
     setFoundItemMessage("Er is geen kledingstuk geselecteerd.");
     return;
   }
@@ -1490,184 +1580,227 @@ let presentationCounterpartName: string | null = null;
     foundItemArticleName === "Presentatiepak" &&
     !foundItemPart
   ) {
+    setFoundItemMessageType("error");
     setFoundItemMessage("Kies eerst Jack of Broek.");
     return;
   }
-if (foundItemArticleName === "Presentatiepak") {
-  const selectedItem = itemSearchItems.find(
-    (item) => item.id === foundItemId
-  );
 
-  if (!selectedItem) {
-    setFoundItemMessageType("error");
-    setFoundItemMessage(
-      "Het geselecteerde Presentatiepak kon niet worden gevonden."
-    );
-    return;
+  // Bij gewone kleding controleren of dit exemplaar momenteel
+  // aan iemand is uitgegeven.
+  if (foundItemArticleName !== "Presentatiepak") {
+    const { data: activeAssignments, error: activeAssignmentError } =
+      await supabase
+        .from("item_assignments")
+        .select("member_id")
+        .eq("individual_item_id", foundItemId)
+        .is("returned_date", null)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+    if (activeAssignmentError) {
+      setFoundItemMessageType("error");
+      setFoundItemMessage(
+        "Controle op de huidige eigenaar mislukt: " +
+          activeAssignmentError.message
+      );
+      return;
+    }
+
+    const activeAssignment = activeAssignments?.[0] ?? null;
+
+    if (activeAssignment?.member_id) {
+      memberIdForFoundItem = activeAssignment.member_id;
+      setFoundItemMemberId(activeAssignment.member_id);
+    }
   }
 
-  const selectedSize = sizes.find(
-    (size) => size.id === selectedItem.size_id
-  );
+  if (foundItemArticleName === "Presentatiepak") {
+    const selectedItem = itemSearchItems.find(
+      (item) => item.id === foundItemId
+    );
 
-  const { data: currentPresentationAssignments, error: assignmentError } =
-    await supabase
+    if (!selectedItem) {
+      setFoundItemMessageType("error");
+      setFoundItemMessage(
+        "Het geselecteerde Presentatiepak kon niet worden gevonden."
+      );
+      return;
+    }
+
+    const selectedSize = sizes.find(
+      (size) => size.id === selectedItem.size_id
+    );
+
+    const {
+      data: currentPresentationAssignments,
+      error: assignmentError,
+    } = await supabase
       .from("current_item_assignments")
       .select("member_id, article, unique_number, size")
       .eq("article", "Presentatiepak")
       .eq("unique_number", selectedItem.unique_number)
       .eq("size", selectedSize?.name ?? "");
 
-  if (assignmentError) {
-    setFoundItemMessageType("error");
-    setFoundItemMessage(
-      "Controle op uitgegeven Presentatiepak mislukt: " +
-        assignmentError.message
-    );
-    return;
+    if (assignmentError) {
+      setFoundItemMessageType("error");
+      setFoundItemMessage(
+        "Controle op uitgegeven Presentatiepak mislukt: " +
+          assignmentError.message
+      );
+      return;
+    }
+
+    const currentPresentationAssignment =
+      currentPresentationAssignments?.[0] ?? null;
+
+    if (currentPresentationAssignment) {
+      memberIdForFoundItem =
+        currentPresentationAssignment.member_id;
+
+      setFoundItemMemberId(
+        currentPresentationAssignment.member_id
+      );
+    }
+
+    if (!currentPresentationAssignment) {
+      const counterpartArticleName =
+        foundItemPart === "Jack"
+          ? "Presentatie broek"
+          : "Presentatie jack";
+
+      const counterpartArticle = articleTypes.find(
+        (article) => article.name === counterpartArticleName
+      );
+
+      if (!counterpartArticle) {
+        setFoundItemMessageType("error");
+        setFoundItemMessage(
+          "Het bijbehorende presentatieonderdeel kon niet worden gevonden."
+        );
+        return;
+      }
+
+      const {
+        data: counterpartItems,
+        error: counterpartError,
+      } = await supabase
+        .from("individual_items")
+        .select(
+          "id, article_type_id, size_id, unique_number, status, condition"
+        )
+        .eq("article_type_id", counterpartArticle.id)
+        .eq("unique_number", selectedItem.unique_number)
+        .eq("size_id", selectedItem.size_id)
+        .eq("status", "incomplete");
+
+      if (counterpartError) {
+        setFoundItemMessageType("error");
+        setFoundItemMessage(
+          "Controle op een passend presentatieonderdeel mislukt: " +
+            counterpartError.message
+        );
+        return;
+      }
+
+      if ((counterpartItems ?? []).length > 0) {
+        presentationCounterpartName = counterpartArticleName;
+      }
+    }
   }
-
-  const currentPresentationAssignment =
-    currentPresentationAssignments?.[0] ?? null;
-
-if (currentPresentationAssignment) {
-  memberIdForFoundItem = currentPresentationAssignment.member_id;
-  setFoundItemMemberId(currentPresentationAssignment.member_id);
-}
-if (!currentPresentationAssignment) {
-  const counterpartArticleName =
-    foundItemPart === "Jack"
-      ? "Presentatie broek"
-      : "Presentatie jack";
-
-  const counterpartArticle = articleTypes.find(
-    (article) => article.name === counterpartArticleName
-  );
-
-  if (!counterpartArticle) {
-    setFoundItemMessageType("error");
-    setFoundItemMessage(
-      "Het bijbehorende presentatieonderdeel kon niet worden gevonden."
-    );
-    return;
-  }
-
-  const { data: counterpartItems, error: counterpartError } =
-    await supabase
-      .from("individual_items")
-      .select("id, article_type_id, size_id, unique_number, status, condition")
-      .eq("article_type_id", counterpartArticle.id)
-      .eq("unique_number", selectedItem.unique_number)
-      .eq("size_id", selectedItem.size_id)
-      .eq("status", "incomplete");
-
-  if (counterpartError) {
-    setFoundItemMessageType("error");
-    setFoundItemMessage(
-      "Controle op een passend presentatieonderdeel mislukt: " +
-        counterpartError.message
-    );
-    return;
-  }
-
-if ((counterpartItems ?? []).length > 0) {
-presentationCounterpartName = counterpartArticleName;
-  setFoundItemMessageType("success");
-  setFoundItemMessage(
-    `Passende ${counterpartArticleName.toLowerCase()} gevonden. Met het gevonden onderdeel kan weer een compleet Presentatiepak worden gemaakt.`
-  );
-
-}
-}
-}
 
   setFoundItemMessage("");
 
-const { data: existingFoundItems, error: existingFoundItemError } =
-  await supabase
+  const {
+    data: existingFoundItems,
+    error: existingFoundItemError,
+  } = await supabase
     .from("found_items")
     .select("id")
     .eq("individual_item_id", foundItemId)
     .eq("status", "gevonden");
 
-if (existingFoundItemError) {
-  setFoundItemMessage(
-    "Controle op bestaande registratie mislukt: " +
-      existingFoundItemError.message
-  );
-  return;
-}
-
-if ((existingFoundItems ?? []).length > 0) {
-setFoundItemMessageType("error");
-  setFoundItemMessage(
-    "Dit kledingstuk staat al als gevonden geregistreerd."
-  );
-  return;
-}
-if (foundItemArticleName === "Presentatiepak") {
-  const { error: presentationPartError } = await supabase.rpc(
-    "register_found_presentation_part",
-    {
-  p_original_item_id: foundItemId,
-  p_part: foundItemPart,
-  p_condition: "good",
-  p_member_id: memberIdForFoundItem,
-  p_note: foundItemNote.trim() || null,
-}
-  );
-
-  if (presentationPartError) {
+  if (existingFoundItemError) {
     setFoundItemMessageType("error");
     setFoundItemMessage(
-      "Gevonden presentatieonderdeel kon niet aan de voorraad worden toegevoegd: " +
-        presentationPartError.message
+      "Controle op bestaande registratie mislukt: " +
+        existingFoundItemError.message
     );
     return;
   }
-  await loadDashboard();
-  setFoundItemMessageType("success");
 
-  if (presentationCounterpartName) {
+  if ((existingFoundItems ?? []).length > 0) {
+    setFoundItemMessageType("error");
     setFoundItemMessage(
-      `Gevonden voorwerp is geregistreerd. Passende ${presentationCounterpartName.toLowerCase()} gevonden. Hiermee kan weer een compleet Presentatiepak worden gemaakt.`
+      "Dit kledingstuk staat al als gevonden geregistreerd."
     );
-  } else {
-    setFoundItemMessage("Gevonden voorwerp is geregistreerd.");
+    return;
   }
 
-  setFoundItemNote("");
-  setFoundItemPart("");
-  setShowFoundItemForm(false);
-  return;
-}
+  if (foundItemArticleName === "Presentatiepak") {
+    const { error: presentationPartError } =
+      await supabase.rpc(
+        "register_found_presentation_part",
+        {
+          p_original_item_id: foundItemId,
+          p_part: foundItemPart,
+          p_condition: "good",
+          p_member_id: memberIdForFoundItem,
+          p_note: foundItemNote.trim() || null,
+        }
+      );
+
+    if (presentationPartError) {
+      setFoundItemMessageType("error");
+      setFoundItemMessage(
+        "Gevonden presentatieonderdeel kon niet aan de voorraad worden toegevoegd: " +
+          presentationPartError.message
+      );
+      return;
+    }
+
+    await loadDashboard();
+
+    setFoundItemMessageType("success");
+
+    if (presentationCounterpartName) {
+      setFoundItemMessage(
+        `Gevonden voorwerp is geregistreerd. Passende ${presentationCounterpartName.toLowerCase()} gevonden. Hiermee kan weer een compleet Presentatiepak worden gemaakt.`
+      );
+    } else {
+      setFoundItemMessage(
+        "Gevonden voorwerp is geregistreerd."
+      );
+    }
+
+    setFoundItemNote("");
+    setFoundItemPart("");
+    setShowFoundItemForm(false);
+    return;
+  }
+
   const { error } = await supabase
     .from("found_items")
     .insert({
       individual_item_id: foundItemId,
-member_id: memberIdForFoundItem,
+      member_id: memberIdForFoundItem,
       part: foundItemPart || null,
       note: foundItemNote.trim() || null,
     });
 
   if (error) {
+    setFoundItemMessageType("error");
     setFoundItemMessage(
-      "Gevonden voorwerp kon niet worden geregistreerd: " + error.message
+      "Gevonden voorwerp kon niet worden geregistreerd: " +
+        error.message
     );
     return;
   }
-await loadDashboard();
-setFoundItemMessageType("success");
 
-setFoundItemMessageType("success");
+  await loadDashboard();
 
-if (presentationCounterpartName) {
-  setFoundItemMessage(
-    `Gevonden voorwerp is geregistreerd. Passende ${presentationCounterpartName.toLowerCase()} gevonden. Hiermee kan weer een compleet Presentatiepak worden gemaakt.`
-  );
-} else {
+  setFoundItemMessageType("success");
   setFoundItemMessage("Gevonden voorwerp is geregistreerd.");
-}
+
   setFoundItemNote("");
   setFoundItemPart("");
   setShowFoundItemForm(false);
@@ -2334,9 +2467,24 @@ setTeamBagContents(
     setTeamBagsWithShortage(uniqueBags.size);
 const { data: foundItemData, error: foundItemError } = await supabase
   .from("found_items")
-  .select(
-    "id, individual_item_id, member_id, part, found_date, found_location, note, status, returned_at, notification_sent_at"
-  )
+  .select(`
+    id,
+    individual_item_id,
+    member_id,
+    part,
+    found_date,
+    found_location,
+    note,
+    status,
+    returned_at,
+    notification_sent_at,
+    individual_items (
+      id,
+      unique_number,
+      article_type_id,
+      size_id
+    )
+  `)
   .eq("status", "gevonden")
   .order("found_date", { ascending: false });
 
@@ -2348,7 +2496,7 @@ if (foundItemError) {
   return;
 }
 
-setFoundItems((foundItemData ?? []) as FoundItem[]);
+setFoundItems((foundItemData ?? []) as unknown as FoundItem[]);
 await loadInventoryItems();
 await loadArticleTypes();
 await loadSizes();
@@ -2582,7 +2730,7 @@ if (resetMode) {
 </p>
             </div>
           )}
-<div className="mb-8 grid gap-4 md:grid-cols-3">
+<div className="mb-8 grid gap-4 md:grid-cols-4">
   <button
     type="button"
    onClick={() => {
@@ -2615,21 +2763,36 @@ if (resetMode) {
     </p>
   </button>
 
-  <button
-    type="button"
-    onClick={() => {
-  setSelectedGroup("Selectiespeler");
-  setActiveSection("personen");
-}}
-    className="rounded-2xl bg-white p-6 text-left shadow hover:bg-gray-50"
-  >
-    <p className="text-lg font-bold text-gray-900">
-      Selectiespelers
-    </p>
-    <p className="mt-2 text-sm text-gray-600">
-      Personen, uitgegeven kleding en voorraad voor selectiespelers
-    </p>
-  </button>
+ <button
+  type="button"
+  onClick={() => {
+    setSelectedGroup("Selectiespeler");
+    setActiveSection("personen");
+  }}
+  className="rounded-2xl bg-white p-6 text-left shadow hover:bg-gray-50"
+>
+  <p className="text-lg font-bold text-gray-900">
+    Selectiespelers
+  </p>
+  <p className="mt-2 text-sm text-gray-600">
+    Personen, uitgegeven kleding en voorraad voor selectiespelers
+  </p>
+</button>
+
+<button
+  type="button"
+  onClick={() => {
+    setActiveSection("gevonden");
+  }}
+  className="rounded-2xl bg-white p-6 text-left shadow hover:bg-gray-50"
+>
+  <p className="text-lg font-bold text-gray-900">
+    Gevonden voorwerpen
+  </p>
+  <p className="mt-2 text-sm text-gray-600">
+    Bekijk gevonden kleding en de bijbehorende eigenaar
+  </p>
+</button>
 </div>
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-2xl bg-white p-6 shadow">
@@ -2852,55 +3015,27 @@ onClick={registerLooseFoundPresentationPart}
     <table className="w-full text-left text-sm">
       <thead className="bg-gray-50">
         <tr>
-          <th className="px-4 py-3 font-medium text-gray-600">
-            Artikel
-          </th>
-          <th className="px-4 py-3 font-medium text-gray-600">
-            Nummer
-          </th>
-          <th className="px-4 py-3 font-medium text-gray-600">
-            Maat
-          </th>
-          <th className="px-4 py-3 font-medium text-gray-600">
-            Status
-          </th>
-          <th className="px-4 py-3 font-medium text-gray-600">
-            Conditie
-          </th>
+          <SortableTh label="Artikel" sortKey="article" sort={tableSorts["itemSearch"]} onSort={(key) => toggleTableSort("itemSearch", key)} className="px-4 py-3 font-medium text-gray-600" />
+          <SortableTh label="Nummer" sortKey="number" sort={tableSorts["itemSearch"]} onSort={(key) => toggleTableSort("itemSearch", key)} className="px-4 py-3 font-medium text-gray-600" />
+          <SortableTh label="Maat" sortKey="size" sort={tableSorts["itemSearch"]} onSort={(key) => toggleTableSort("itemSearch", key)} className="px-4 py-3 font-medium text-gray-600" />
+          <SortableTh label="Status" sortKey="status" sort={tableSorts["itemSearch"]} onSort={(key) => toggleTableSort("itemSearch", key)} className="px-4 py-3 font-medium text-gray-600" />
+          <SortableTh label="Conditie" sortKey="condition" sort={tableSorts["itemSearch"]} onSort={(key) => toggleTableSort("itemSearch", key)} className="px-4 py-3 font-medium text-gray-600" />
         </tr>
       </thead>
 
       <tbody>
-    {[...itemSearchItems]
-  .sort((a, b) => {
-    const articleA =
-      articleTypes.find((article) => article.id === a.article_type_id)?.name ?? "";
-
-    const articleB =
-      articleTypes.find((article) => article.id === b.article_type_id)?.name ?? "";
-
-    const articleCompare = articleA.localeCompare(articleB, "nl");
-
-    if (articleCompare !== 0) {
-      return articleCompare;
-    }
-
-    const numberCompare = (a.unique_number ?? "").localeCompare(
-      b.unique_number ?? "",
-      "nl",
-      { numeric: true }
-    );
-
-    if (numberCompare !== 0) {
-      return numberCompare;
-    }
-
-    const sizeA = sizes.find((size) => size.id === a.size_id)?.name ?? "";
-    const sizeB = sizes.find((size) => size.id === b.size_id)?.name ?? "";
-
-    return sizeA.localeCompare(sizeB, "nl", { numeric: true });
-  })
-  .map((item) => {
+    {sortedRows("itemSearch", itemSearchItems, (item, key) => {
+  const article = articleTypes.find((article) => article.id === item.article_type_id)?.name ?? "";
+  const size = sizes.find((size) => size.id === item.size_id)?.name ?? "";
+  const statusLabels: Record<string, string> = { available: "Beschikbaar", issued: "Uitgegeven", incomplete: "Incompleet", damaged: "Beschadigd", missing: "Vermist", repair: "Reparatie", retired: "Uit gebruik" };
+  const conditionLabels: Record<string, string> = { good: "Goed", damaged: "Beschadigd" };
+  if (key === "article") return article;
+  if (key === "number") return item.unique_number;
+  if (key === "size") return size;
+  if (key === "status") return statusLabels[item.status] ?? item.status;
+  if (key === "condition") return conditionLabels[item.condition] ?? item.condition;
+  return "";
+}).map((item) => {
           const article = articleTypes.find(
             (article) => article.id === item.article_type_id
           );
@@ -2927,7 +3062,7 @@ onClick={registerLooseFoundPresentationPart}
           return (
            <tr
   key={item.id}
-  onClick={() => {
+  onClick={async () => {
     setFoundItemId(item.id);
 
     const article = articleTypes.find(
@@ -2936,8 +3071,42 @@ onClick={registerLooseFoundPresentationPart}
 
     setFoundItemArticleName(article?.name ?? "");
     setFoundItemMemberId(null);
+    setFoundItemMemberName("");
     setFoundItemPart("");
     setShowFoundItemForm(false);
+
+    const { data: activeAssignments, error: activeAssignmentError } =
+      await supabase
+        .from("item_assignments")
+        .select("member_id, created_at")
+        .eq("individual_item_id", item.id)
+        .is("returned_date", null)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+    if (activeAssignmentError) {
+      setFoundItemMessageType("error");
+      setFoundItemMessage(
+        "Huidige eigenaar kon niet worden opgezocht: " +
+          activeAssignmentError.message
+      );
+      return;
+    }
+
+    const activeAssignment = activeAssignments?.[0] ?? null;
+
+    if (activeAssignment?.member_id) {
+      const member = members.find(
+        (entry) => entry.member_id === activeAssignment.member_id
+      );
+
+      const memberName = member
+        ? `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim()
+        : "Onbekende persoon";
+
+      setFoundItemMemberId(activeAssignment.member_id);
+      setFoundItemMemberName(memberName);
+    }
   }}
   className={`cursor-pointer border-t border-gray-100 ${
     foundItemId === item.id
@@ -2994,6 +3163,14 @@ onClick={() => setShowFoundItemForm(true)}
 {showFoundItemForm && foundItemId !== null && (
   <div className="mt-4 rounded-lg border border-gray-200 p-4">
     <h3 className="font-semibold">Gevonden voorwerp registreren</h3>
+
+    {foundItemMemberId !== null && (
+      <div className="mt-3 rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
+        <span className="font-medium">Uitgegeven aan:</span>{" "}
+        {foundItemMemberName || "Onbekende persoon"}
+      </div>
+    )}
+
 {foundItemArticleName === "Presentatiepak" && (
   <div className="mt-3">
     <label className="mb-1 block text-sm font-medium">
@@ -3033,6 +3210,111 @@ onClick={registerFoundItem}
 )}
   </div>
 )}
+
+{activeSection === "gevonden" && (
+  <div className="mt-8 rounded-2xl bg-white p-6 shadow">
+    <h2 className="text-lg font-bold text-gray-900">
+      Gevonden voorwerpen
+    </h2>
+
+    <p className="mt-2 text-sm text-gray-600">
+      Overzicht van alle geregistreerde gevonden voorwerpen.
+    </p>
+
+    {foundItems.length === 0 ? (
+      <p className="mt-6 text-sm text-gray-600">
+        Er zijn geen gevonden voorwerpen geregistreerd.
+      </p>
+    ) : (
+      <div className="mt-6 overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-gray-200">
+              <SortableTh label="Artikel" sortKey="article" sort={tableSorts["foundItems"]} onSort={(key) => toggleTableSort("foundItems", key)} className="px-3 py-3" />
+<SortableTh label="Nummer" sortKey="number" sort={tableSorts["foundItems"]} onSort={(key) => toggleTableSort("foundItems", key)} className="px-3 py-3" />
+<SortableTh label="Maat" sortKey="size" sort={tableSorts["foundItems"]} onSort={(key) => toggleTableSort("foundItems", key)} className="px-3 py-3" />
+<SortableTh label="Gevonden op" sortKey="date" sort={tableSorts["foundItems"]} onSort={(key) => toggleTableSort("foundItems", key)} className="px-3 py-3" />
+<SortableTh label="Eigenaar" sortKey="owner" sort={tableSorts["foundItems"]} onSort={(key) => toggleTableSort("foundItems", key)} className="px-3 py-3" />
+<SortableTh label="Notitie" sortKey="note" sort={tableSorts["foundItems"]} onSort={(key) => toggleTableSort("foundItems", key)} className="px-3 py-3" />
+<SortableTh label="Status" sortKey="status" sort={tableSorts["foundItems"]} onSort={(key) => toggleTableSort("foundItems", key)} className="px-3 py-3" />
+            </tr>
+          </thead>
+
+          <tbody>
+        {sortedRows("foundItems", foundItems, (foundItem, key) => {
+const item = foundItem.individual_items;
+  const article = articleTypes.find((articleType) => articleType.id === item?.article_type_id)?.name ?? "";
+  const size = sizes.find((sizeItem) => sizeItem.id === item?.size_id)?.name ?? "";
+  const member = members.find((member) => member.member_id === foundItem.member_id);
+  const owner = member ? `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim() : "";
+  if (key === "article") return article;
+  if (key === "number") return item?.unique_number ?? "";
+  if (key === "size") return size;
+  if (key === "date") return foundItem.found_date;
+  if (key === "owner") return owner;
+  if (key === "note") return foundItem.note ?? "";
+  if (key === "status") return foundItem.status === "gevonden" ? "Gevonden" : foundItem.status;
+  return "";
+}).map((foundItem) => {
+const item = foundItem.individual_items;
+  const article = articleTypes.find(
+    (articleType) => articleType.id === item?.article_type_id
+  );
+
+  const size = sizes.find(
+    (sizeItem) => sizeItem.id === item?.size_id
+  );
+
+  const member = members.find(
+    (member) => member.member_id === foundItem.member_id
+  );
+
+  return (
+    <tr
+      key={foundItem.id}
+      className="border-b border-gray-100"
+    >
+      <td className="px-3 py-3">
+        {article?.name ?? "-"}
+      </td>
+
+      <td className="px-3 py-3">
+        {item?.unique_number ?? "-"}
+      </td>
+
+      <td className="px-3 py-3">
+        {size?.name ?? "-"}
+      </td>
+
+      <td className="px-3 py-3">
+        {foundItem.found_date ?? "-"}
+      </td>
+
+      <td className="px-3 py-3">
+        {member
+          ? `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim()
+          : "-"}
+      </td>
+
+      <td className="px-3 py-3">
+        {foundItem.note ?? "-"}
+      </td>
+
+      <td className="px-3 py-3">
+        {foundItem.status === "gevonden"
+          ? "Gevonden"
+          : foundItem.status}
+      </td>
+    </tr>
+  );
+})}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </div>
+)}
+
 {activeSection === "voorraad" && (
 <div className="mt-8 rounded-2xl bg-white p-6 shadow">
   <h2 className="text-lg font-bold text-gray-900">
@@ -3143,26 +3425,23 @@ onClick={registerFoundItem}
       <table className="w-full text-left">
         <thead className="border-b border-gray-200">
           <tr>
-            <th className="px-3 py-2 text-sm font-medium text-gray-600">
-              Kledingstuk
-            </th>
-            <th className="px-3 py-2 text-sm font-medium text-gray-600">
-              Totaal
-            </th>
-            <th className="px-3 py-2 text-sm font-medium text-gray-600">
-              Beschikbaar
-            </th>
-            <th className="px-3 py-2 text-sm font-medium text-gray-600">
-              Uitgegeven
-            </th>
-            <th className="px-3 py-2 text-sm font-medium text-gray-600">
-              Beschadigd
-            </th>
+            <SortableTh label="Kledingstuk" sortKey="article" sort={tableSorts["inventorySummary"]} onSort={(key) => toggleTableSort("inventorySummary", key)} className="px-3 py-2 text-sm font-medium text-gray-600" />
+            <SortableTh label="Totaal" sortKey="total" sort={tableSorts["inventorySummary"]} onSort={(key) => toggleTableSort("inventorySummary", key)} className="px-3 py-2 text-sm font-medium text-gray-600" />
+            <SortableTh label="Beschikbaar" sortKey="available" sort={tableSorts["inventorySummary"]} onSort={(key) => toggleTableSort("inventorySummary", key)} className="px-3 py-2 text-sm font-medium text-gray-600" />
+            <SortableTh label="Uitgegeven" sortKey="issued" sort={tableSorts["inventorySummary"]} onSort={(key) => toggleTableSort("inventorySummary", key)} className="px-3 py-2 text-sm font-medium text-gray-600" />
+            <SortableTh label="Beschadigd" sortKey="damaged" sort={tableSorts["inventorySummary"]} onSort={(key) => toggleTableSort("inventorySummary", key)} className="px-3 py-2 text-sm font-medium text-gray-600" />
           </tr>
         </thead>
 
         <tbody>
-          {inventorySummary.map((item) => (
+          {sortedRows("inventorySummary", inventorySummary, (item, key) => {
+  if (key === "article") return item.article;
+  if (key === "total") return item.total;
+  if (key === "available") return item.available;
+  if (key === "issued") return item.issued;
+  if (key === "damaged") return item.damaged;
+  return "";
+}).map((item) => (
             <tr
               key={item.article_type_id}
               onClick={() =>
@@ -3216,26 +3495,26 @@ onClick={registerFoundItem}
             <table className="w-full text-left">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-3 py-2 text-sm font-medium text-gray-600">
-                    Nummer
-                  </th>
-                  <th className="px-3 py-2 text-sm font-medium text-gray-600">
-                    Maat
-                  </th>
-                  <th className="px-3 py-2 text-sm font-medium text-gray-600">
-                    Status
-                  </th>
+                  <SortableTh label="Nummer" sortKey="number" sort={tableSorts["inventoryDetails"]} onSort={(key) => toggleTableSort("inventoryDetails", key)} className="px-3 py-2 text-sm font-medium text-gray-600" />
+                  <SortableTh label="Maat" sortKey="size" sort={tableSorts["inventoryDetails"]} onSort={(key) => toggleTableSort("inventoryDetails", key)} className="px-3 py-2 text-sm font-medium text-gray-600" />
+                  <SortableTh label="Status" sortKey="status" sort={tableSorts["inventoryDetails"]} onSort={(key) => toggleTableSort("inventoryDetails", key)} className="px-3 py-2 text-sm font-medium text-gray-600" />
                 </tr>
               </thead>
 
               <tbody>
-                {inventoryItems
-                  .filter(
+                {sortedRows(
+                  "inventoryDetails",
+                  inventoryItems.filter(
                     (inventoryItem) =>
-                      inventoryItem.article_type_id ===
-                      selectedInventoryArticleId
-                  )
-                  .map((inventoryItem) => (
+                      inventoryItem.article_type_id === selectedInventoryArticleId
+                  ),
+                  (inventoryItem, key) => {
+                    if (key === "number") return inventoryItem.unique_number;
+                    if (key === "size") return sizes.find((size) => size.id === inventoryItem.size_id)?.name ?? "";
+                    if (key === "status") return inventoryItem.status === "available" ? "Beschikbaar" : inventoryItem.status === "issued" ? "Uitgegeven" : inventoryItem.status === "damaged" ? "Beschadigd" : inventoryItem.status;
+                    return "";
+                  }
+                ).map((inventoryItem) => (
                     <tr
                       key={inventoryItem.id}
                       className="border-b border-gray-100"
@@ -3319,19 +3598,21 @@ onClick={registerFoundItem}
     <table className="w-full text-left">
       <thead className="bg-gray-50">
         <tr>
-       <th className="w-1/2 px-6 py-3 text-sm font-medium text-gray-600">
-  Naam
-</th>
-<th className="w-1/2 px-6 py-3 text-sm font-medium text-gray-600">
-  Status
-</th>
+       <SortableTh label="Naam" sortKey="name" sort={tableSorts["teamBags"]} onSort={(key) => toggleTableSort("teamBags", key)} className="w-1/2 px-6 py-3 text-sm font-medium text-gray-600" />
+<SortableTh label="Status" sortKey="status" sort={tableSorts["teamBags"]} onSort={(key) => toggleTableSort("teamBags", key)} className="w-1/2 px-6 py-3 text-sm font-medium text-gray-600" />
         </tr>
       </thead>
 
       <tbody>
-     {teamBags
-  .filter((bag) => bag.team_id !== null)
-  .map((bag) => (
+     {sortedRows(
+  "teamBags",
+  teamBags.filter((bag) => bag.team_id !== null),
+  (bag, key) => {
+    if (key === "name") return bag.name;
+    if (key === "status") return bag.status === "issued" ? "Uitgegeven" : bag.status === "returned" ? "Ingenomen" : bag.status === "in_stock" ? "Beschikbaar" : bag.status;
+    return "";
+  }
+).map((bag) => (
       <tr
   key={bag.id}
   onClick={() => {
@@ -3440,21 +3721,11 @@ onClick={registerFoundItem}
   <table className="w-full text-left">
     <thead className="bg-gray-50">
       <tr>
-        <th className="px-4 py-3 text-sm font-medium text-gray-600">
-          Kledingstuk
-        </th>
-        <th className="px-4 py-3 text-sm font-medium text-gray-600">
-          Maat
-        </th>
-        <th className="px-4 py-3 text-sm font-medium text-gray-600">
-          Verwacht
-        </th>
-        <th className="px-4 py-3 text-sm font-medium text-gray-600">
-          Aanwezig
-        </th>
-        <th className="px-4 py-3 text-sm font-medium text-gray-600">
-          Beschadigd
-        </th>
+        <SortableTh label="Kledingstuk" sortKey="article" sort={tableSorts["teamBagContents"]} onSort={(key) => toggleTableSort("teamBagContents", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+        <SortableTh label="Maat" sortKey="size" sort={tableSorts["teamBagContents"]} onSort={(key) => toggleTableSort("teamBagContents", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+        <SortableTh label="Verwacht" sortKey="expected" sort={tableSorts["teamBagContents"]} onSort={(key) => toggleTableSort("teamBagContents", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+        <SortableTh label="Aanwezig" sortKey="actual" sort={tableSorts["teamBagContents"]} onSort={(key) => toggleTableSort("teamBagContents", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+        <SortableTh label="Beschadigd" sortKey="damaged" sort={tableSorts["teamBagContents"]} onSort={(key) => toggleTableSort("teamBagContents", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
 <th className="px-4 py-3 text-sm font-medium text-gray-600">
   Maatwissel
 </th>
@@ -3462,26 +3733,18 @@ onClick={registerFoundItem}
     </thead>
 
     <tbody>
-    {teamBagContents
-  .filter((item) => item.team_bag_id === selectedTeamBagId)
-  .sort((a, b) => {
-    const articleA =
-      articleTypes.find((article) => article.id === a.article_type_id)?.name ?? "";
-    const articleB =
-      articleTypes.find((article) => article.id === b.article_type_id)?.name ?? "";
-
-    const articleCompare = articleA.localeCompare(articleB);
-
-    if (articleCompare !== 0) {
-      return articleCompare;
-    }
-
-    const sizeIndexA = sizes.findIndex((size) => size.id === a.size_id);
-    const sizeIndexB = sizes.findIndex((size) => size.id === b.size_id);
-
-    return sizeIndexA - sizeIndexB;
-  })
-  .map((item) => {
+    {sortedRows(
+  "teamBagContents",
+  teamBagContents.filter((item) => item.team_bag_id === selectedTeamBagId),
+  (item, key) => {
+    if (key === "article") return articleTypes.find((article) => article.id === item.article_type_id)?.name ?? "";
+    if (key === "size") return sizes.find((size) => size.id === item.size_id)?.name ?? "";
+    if (key === "expected") return item.expected_quantity;
+    if (key === "actual") return teamBagReturnActual[item.id] ?? item.actual_quantity;
+    if (key === "damaged") return teamBagReturnDamaged[item.id] ?? item.damaged_quantity;
+    return "";
+  }
+).map((item) => {
           const article = articleTypes.find(
             (article) => article.id === item.article_type_id
           );
@@ -3601,26 +3864,26 @@ onClick={async () => {
     <table className="w-full text-left">
       <thead className="bg-gray-50">
         <tr>
-          <th className="px-4 py-3 text-sm font-medium text-gray-600">
-            Kledingstuk
-          </th>
-          <th className="px-4 py-3 text-sm font-medium text-gray-600">
-            Wijziging
-          </th>
-          <th className="px-4 py-3 text-sm font-medium text-gray-600">
-            Aantal
-          </th>
-          <th className="px-4 py-3 text-sm font-medium text-gray-600">
-            Reden
-          </th>
-          <th className="px-4 py-3 text-sm font-medium text-gray-600">
-            Datum
-          </th>
+          <SortableTh label="Kledingstuk" sortKey="article" sort={tableSorts["teamBagHistory"]} onSort={(key) => toggleTableSort("teamBagHistory", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+          <SortableTh label="Wijziging" sortKey="change" sort={tableSorts["teamBagHistory"]} onSort={(key) => toggleTableSort("teamBagHistory", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+          <SortableTh label="Aantal" sortKey="quantity" sort={tableSorts["teamBagHistory"]} onSort={(key) => toggleTableSort("teamBagHistory", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+          <SortableTh label="Reden" sortKey="reason" sort={tableSorts["teamBagHistory"]} onSort={(key) => toggleTableSort("teamBagHistory", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+          <SortableTh label="Datum" sortKey="date" sort={tableSorts["teamBagHistory"]} onSort={(key) => toggleTableSort("teamBagHistory", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
         </tr>
       </thead>
 
       <tbody>
-        {teamBagContentHistory.map((historyItem) => {
+        {sortedRows("teamBagHistory", teamBagContentHistory, (historyItem, key) => {
+  const article = articleTypes.find((article) => article.id === historyItem.article_type_id)?.name ?? "";
+  const oldSize = sizes.find((size) => size.id === historyItem.old_size_id)?.name ?? "";
+  const newSize = sizes.find((size) => size.id === historyItem.new_size_id)?.name ?? "";
+  if (key === "article") return article;
+  if (key === "change") return `${oldSize} → ${newSize}`;
+  if (key === "quantity") return historyItem.quantity;
+  if (key === "reason") return historyItem.reason ?? "";
+  if (key === "date") return historyItem.created_at;
+  return "";
+}).map((historyItem) => {
           const article = articleTypes.find(
             (article) => article.id === historyItem.article_type_id
           );
@@ -3989,19 +4252,21 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
     <table className="w-full text-left">
       <thead className="bg-gray-50">
         <tr>
-          <th className="w-1/2 px-6 py-3 text-sm font-medium text-gray-600">
-  Naam
-</th>
-<th className="w-1/2 px-6 py-3 text-sm font-medium text-gray-600">
-  Status
-</th>
+          <SortableTh label="Naam" sortKey="name" sort={tableSorts["awayBags"]} onSort={(key) => toggleTableSort("awayBags", key)} className="w-1/2 px-6 py-3 text-sm font-medium text-gray-600" />
+<SortableTh label="Status" sortKey="status" sort={tableSorts["awayBags"]} onSort={(key) => toggleTableSort("awayBags", key)} className="w-1/2 px-6 py-3 text-sm font-medium text-gray-600" />
         </tr>
       </thead>
 
       <tbody>
-        {teamBags
-          .filter((bag) => bag.team_id === null)
-          .map((bag) => (
+        {sortedRows(
+          "awayBags",
+          teamBags.filter((bag) => bag.team_id === null),
+          (bag, key) => {
+            if (key === "name") return bag.name.replace("Uittenuetas - ", "");
+            if (key === "status") return bag.status === "issued" ? "Uitgegeven" : bag.status === "returned" ? "Ingenomen" : bag.status === "in_stock" ? "Beschikbaar" : bag.status;
+            return "";
+          }
+        ).map((bag) => (
             <tr
               key={bag.id}
               onClick={() => {
@@ -4060,28 +4325,27 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
         <table className="w-full text-left">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-4 py-3 text-sm font-medium text-gray-600">
-                Kledingstuk
-              </th>
-              <th className="px-4 py-3 text-sm font-medium text-gray-600">
-                Maat
-              </th>
-              <th className="px-4 py-3 text-sm font-medium text-gray-600">
-  Verwacht
-</th>
-<th className="px-4 py-3 text-sm font-medium text-gray-600">
-  Aanwezig
-</th>
-<th className="px-4 py-3 text-sm font-medium text-gray-600">
-  Beschadigd
-</th>
+              <SortableTh label="Kledingstuk" sortKey="article" sort={tableSorts["awayBagContents"]} onSort={(key) => toggleTableSort("awayBagContents", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+              <SortableTh label="Maat" sortKey="size" sort={tableSorts["awayBagContents"]} onSort={(key) => toggleTableSort("awayBagContents", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+              <SortableTh label="Verwacht" sortKey="expected" sort={tableSorts["awayBagContents"]} onSort={(key) => toggleTableSort("awayBagContents", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+<SortableTh label="Aanwezig" sortKey="actual" sort={tableSorts["awayBagContents"]} onSort={(key) => toggleTableSort("awayBagContents", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+<SortableTh label="Beschadigd" sortKey="damaged" sort={tableSorts["awayBagContents"]} onSort={(key) => toggleTableSort("awayBagContents", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
             </tr>
           </thead>
 
           <tbody>
-            {teamBagContents
-              .filter((item) => item.team_bag_id === selectedTeamBagId)
-              .map((item) => {
+            {sortedRows(
+              "awayBagContents",
+              teamBagContents.filter((item) => item.team_bag_id === selectedTeamBagId),
+              (item, key) => {
+                if (key === "article") return articleTypes.find((article) => article.id === item.article_type_id)?.name ?? "";
+                if (key === "size") return sizes.find((size) => size.id === item.size_id)?.name ?? "";
+                if (key === "expected") return item.expected_quantity;
+                if (key === "actual") return teamBagReturnActual[item.id] ?? item.actual_quantity;
+                if (key === "damaged") return teamBagReturnDamaged[item.id] ?? item.damaged_quantity;
+                return "";
+              }
+            ).map((item) => {
                 const article = articleTypes.find(
                   (article) => article.id === item.article_type_id
                 );
@@ -4340,35 +4604,29 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
     <table className="w-full text-left">
       <thead className="bg-gray-50">
         <tr>
-          <th className="px-6 py-3 text-sm font-medium text-gray-600">
-            Naam
-          </th>
-          <th className="px-6 py-3 text-sm font-medium text-gray-600">
-            Type
-          </th>
-<th className="px-6 py-3 text-sm font-medium text-gray-600">
-  E-mail
-</th>
-<th className="px-6 py-3 text-sm font-medium text-gray-600">
-  Telefoon
-</th>
-          <th className="px-6 py-3 text-sm font-medium text-gray-600">
-            Verwacht
-          </th>
-          <th className="px-6 py-3 text-sm font-medium text-gray-600">
-            Uitgegeven
-          </th>
-          <th className="px-6 py-3 text-sm font-medium text-gray-600">
-            Ontbrekend
-          </th>
-          <th className="px-6 py-3 text-sm font-medium text-gray-600">
-            Status
-          </th>
+          <SortableTh label="Naam" sortKey="name" sort={tableSorts["members"]} onSort={(key) => toggleTableSort("members", key)} className="px-6 py-3 text-sm font-medium text-gray-600" />
+          <SortableTh label="Type" sortKey="type" sort={tableSorts["members"]} onSort={(key) => toggleTableSort("members", key)} className="px-6 py-3 text-sm font-medium text-gray-600" />
+<SortableTh label="E-mail" sortKey="email" sort={tableSorts["members"]} onSort={(key) => toggleTableSort("members", key)} className="px-6 py-3 text-sm font-medium text-gray-600" />
+<SortableTh label="Telefoon" sortKey="phone" sort={tableSorts["members"]} onSort={(key) => toggleTableSort("members", key)} className="px-6 py-3 text-sm font-medium text-gray-600" />
+          <SortableTh label="Verwacht" sortKey="expected" sort={tableSorts["members"]} onSort={(key) => toggleTableSort("members", key)} className="px-6 py-3 text-sm font-medium text-gray-600" />
+          <SortableTh label="Uitgegeven" sortKey="issued" sort={tableSorts["members"]} onSort={(key) => toggleTableSort("members", key)} className="px-6 py-3 text-sm font-medium text-gray-600" />
+          <SortableTh label="Ontbrekend" sortKey="missing" sort={tableSorts["members"]} onSort={(key) => toggleTableSort("members", key)} className="px-6 py-3 text-sm font-medium text-gray-600" />
+          <SortableTh label="Status" sortKey="status" sort={tableSorts["members"]} onSort={(key) => toggleTableSort("members", key)} className="px-6 py-3 text-sm font-medium text-gray-600" />
         </tr>
       </thead>
 
       <tbody>
-       {filteredMembers.map((member) => (
+       {sortedRows("members", filteredMembers, (member, key) => {
+  if (key === "name") return `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim();
+  if (key === "type") return member.member_type ?? "";
+  if (key === "email") return member.email ?? "";
+  if (key === "phone") return member.phone ?? "";
+  if (key === "expected") return Number(member.expected_total ?? 0);
+  if (key === "issued") return Number(member.issued_total ?? 0);
+  if (key === "missing") return Number(member.missing_total ?? 0);
+  if (key === "status") return member.clothing_status ?? "";
+  return "";
+}).map((member) => (
          <tr
   key={member.member_id}
  onClick={() => {
@@ -4823,18 +5081,10 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
       <table className="w-full text-left">
         <thead className="bg-gray-50">
           <tr>
-            <th className="px-6 py-3 text-sm font-medium text-gray-600">
-              Kledingstuk
-            </th>
-            <th className="px-6 py-3 text-sm font-medium text-gray-600">
-              Recht op
-            </th>
-            <th className="px-6 py-3 text-sm font-medium text-gray-600">
-             In bezit
-            </th>
-            <th className="px-6 py-3 text-sm font-medium text-gray-600">
-              Nog uit te geven
-            </th>
+            <SortableTh label="Kledingstuk" sortKey="article" sort={tableSorts["clothingDetails"]} onSort={(key) => toggleTableSort("clothingDetails", key)} className="px-6 py-3 text-sm font-medium text-gray-600" />
+            <SortableTh label="Recht op" sortKey="expected" sort={tableSorts["clothingDetails"]} onSort={(key) => toggleTableSort("clothingDetails", key)} className="px-6 py-3 text-sm font-medium text-gray-600" />
+            <SortableTh label="In bezit" sortKey="issued" sort={tableSorts["clothingDetails"]} onSort={(key) => toggleTableSort("clothingDetails", key)} className="px-6 py-3 text-sm font-medium text-gray-600" />
+            <SortableTh label="Nog uit te geven" sortKey="missing" sort={tableSorts["clothingDetails"]} onSort={(key) => toggleTableSort("clothingDetails", key)} className="px-6 py-3 text-sm font-medium text-gray-600" />
 <th className="px-6 py-3 text-sm font-medium text-gray-600">
   Actie
 </th>
@@ -4843,7 +5093,25 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
 
         <tbody>
       {Object.entries(groupedClothingDetails)
+  .sort(([, itemsA], [, itemsB]) => {
+    const sort = tableSorts["clothingDetails"];
+    if (!sort) return 0;
 
+    const valueFor = (items: ClothingStatus[]) => {
+      const item = items[0];
+      const expected = Math.max(...items.map((groupItem) => Number(groupItem.expected_quantity ?? 0)));
+      const issued = items.reduce((total, groupItem) => total + Number(groupItem.issued_quantity ?? 0), 0);
+      const missing = Math.max(expected - issued, 0);
+      if (sort.key === "article") return item.choice_group === "tas" ? "Tas" : item.article ?? "";
+      if (sort.key === "expected") return expected;
+      if (sort.key === "issued") return issued;
+      if (sort.key === "missing") return missing;
+      return "";
+    };
+
+    const result = compareSortValues(valueFor(itemsA), valueFor(itemsB));
+    return sort.direction === "asc" ? result : -result;
+  })
   .map(([groupKey, items]) => {
   const item = items[0];
 const groupExpected = Math.max(
