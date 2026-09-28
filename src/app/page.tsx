@@ -681,19 +681,86 @@ setTeamBagHolderLastName("");
 }
 async function addTeamBagContent() {
   if (selectedTeamBagId === null) {
-  setTeamBagContentMessage("Geen teamtas geselecteerd.");
-  return;
-}
+    setTeamBagContentMessage("Geen teamtas geselecteerd.");
+    return;
+  }
 
-if (newBagArticleId === null) {
-  setTeamBagContentMessage("Geen kledingstuk geselecteerd.");
-  return;
-}
+  if (newBagArticleId === null) {
+    setTeamBagContentMessage("Geen kledingstuk geselecteerd.");
+    return;
+  }
 
-if (newBagSizeId === null) {
-  setTeamBagContentMessage("Geen maat geselecteerd.");
-  return;
-}
+  if (newBagSizeId === null) {
+    setTeamBagContentMessage("Geen maat geselecteerd.");
+    return;
+  }
+
+  if (newBagQuantity <= 0) {
+    setTeamBagContentMessage("Het aantal moet groter zijn dan 0.");
+    return;
+  }
+
+  const selectedBag = teamBags.find(
+    (bag) => bag.id === selectedTeamBagId
+  );
+
+  if (!selectedBag) {
+    setTeamBagContentMessage("De geselecteerde tas kon niet worden gevonden.");
+    return;
+  }
+
+  const existingContent = teamBagContents.find(
+    (item) =>
+      item.team_bag_id === selectedTeamBagId &&
+      item.article_type_id === newBagArticleId &&
+      item.size_id === newBagSizeId
+  );
+
+  // Uittenuetas: eerst een bestaand tekort aanvullen.
+  // Alleen wat daarna overblijft, vergroot de vaste inhoud.
+  if (selectedBag.team_id === null && existingContent) {
+    const shortage = Math.max(
+      existingContent.expected_quantity - existingContent.actual_quantity,
+      0
+    );
+
+    const shortageFilled = Math.min(newBagQuantity, shortage);
+    const expansionQuantity = newBagQuantity - shortageFilled;
+
+    const newActualQuantity =
+      existingContent.actual_quantity + newBagQuantity;
+
+    const newExpectedQuantity =
+      existingContent.expected_quantity + expansionQuantity;
+
+    const { error } = await supabase
+      .from("team_bag_contents")
+      .update({
+        expected_quantity: newExpectedQuantity,
+        actual_quantity: newActualQuantity,
+      })
+      .eq("id", existingContent.id);
+
+    if (error) {
+      setTeamBagContentMessage(
+        "Kledingstuk kon niet aan de uittenuetas worden toegevoegd: " +
+          error.message
+      );
+      return;
+    }
+
+    setNewBagArticleId(null);
+    setNewBagSizeId(null);
+    setNewBagQuantity(1);
+setTeamBagReturnActual({});
+setTeamBagReturnDamaged({});
+    await loadDashboard();
+
+    setTeamBagContentMessage(
+      "Kleding is succesvol aan de uittenuetas toegevoegd."
+    );
+    return;
+  }
 
   const { error } = await supabase
     .from("team_bag_contents")
@@ -714,14 +781,16 @@ if (newBagSizeId === null) {
     return;
   }
 
- setNewBagArticleId(null);
+  setNewBagArticleId(null);
   setNewBagSizeId(null);
   setNewBagQuantity(1);
 
   await loadDashboard();
 
   setTeamBagContentMessage(
-    "Kledingstuk is succesvol aan de teamtas toegevoegd."
+    selectedBag.team_id === null
+      ? "Kleding is succesvol aan de uittenuetas toegevoegd."
+      : "Kledingstuk is succesvol aan de teamtas toegevoegd."
   );
 }
 async function changeTeamBagSize() {
