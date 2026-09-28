@@ -705,7 +705,9 @@ async function addTeamBagContent() {
   );
 
   if (!selectedBag) {
-    setTeamBagContentMessage("De geselecteerde tas kon niet worden gevonden.");
+    setTeamBagContentMessage(
+      "De geselecteerde tas kon niet worden gevonden."
+    );
     return;
   }
 
@@ -716,28 +718,56 @@ async function addTeamBagContent() {
       item.size_id === newBagSizeId
   );
 
-  // Uittenuetas: eerst een bestaand tekort aanvullen.
-  // Alleen wat daarna overblijft, vergroot de vaste inhoud.
+  // Uittenuetas met een bestaande regel:
+  // 1. eerst beschadigde kleding vervangen
+  // 2. daarna een eventueel tekort aanvullen
+  // 3. alleen wat daarna overblijft is uitbreiding
   if (selectedBag.team_id === null && existingContent) {
+    let remainingQuantity = newBagQuantity;
+
+    const damagedToReplace = Math.min(
+      remainingQuantity,
+      existingContent.damaged_quantity
+    );
+
+    remainingQuantity -= damagedToReplace;
+
+    const actualAfterDamageReplacement =
+      existingContent.actual_quantity;
+
+    const damagedAfterReplacement =
+      existingContent.damaged_quantity - damagedToReplace;
+
     const shortage = Math.max(
-      existingContent.expected_quantity - existingContent.actual_quantity,
+      existingContent.expected_quantity -
+        actualAfterDamageReplacement,
       0
     );
 
-    const shortageFilled = Math.min(newBagQuantity, shortage);
-    const expansionQuantity = newBagQuantity - shortageFilled;
+    const shortageFilled = Math.min(
+      remainingQuantity,
+      shortage
+    );
+
+    remainingQuantity -= shortageFilled;
+
+    const expansionQuantity = remainingQuantity;
 
     const newActualQuantity =
-      existingContent.actual_quantity + newBagQuantity;
+      actualAfterDamageReplacement +
+      shortageFilled +
+      expansionQuantity;
 
     const newExpectedQuantity =
-      existingContent.expected_quantity + expansionQuantity;
+      existingContent.expected_quantity +
+      expansionQuantity;
 
     const { error } = await supabase
       .from("team_bag_contents")
       .update({
         expected_quantity: newExpectedQuantity,
         actual_quantity: newActualQuantity,
+        damaged_quantity: damagedAfterReplacement,
       })
       .eq("id", existingContent.id);
 
@@ -752,8 +782,10 @@ async function addTeamBagContent() {
     setNewBagArticleId(null);
     setNewBagSizeId(null);
     setNewBagQuantity(1);
-setTeamBagReturnActual({});
-setTeamBagReturnDamaged({});
+
+    setTeamBagReturnActual({});
+    setTeamBagReturnDamaged({});
+
     await loadDashboard();
 
     setTeamBagContentMessage(
@@ -784,6 +816,9 @@ setTeamBagReturnDamaged({});
   setNewBagArticleId(null);
   setNewBagSizeId(null);
   setNewBagQuantity(1);
+
+  setTeamBagReturnActual({});
+  setTeamBagReturnDamaged({});
 
   await loadDashboard();
 
