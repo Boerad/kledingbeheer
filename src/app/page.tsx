@@ -911,7 +911,7 @@ async function removeTeamBagContent() {
 }
 async function returnTeamBag() {
   setTeamBagReturnMessage("");
-setTeamBagIssueMessage("");
+  setTeamBagIssueMessage("");
 
   if (selectedTeamBagId === null) {
     setTeamBagReturnMessage("Kies eerst een teamtas.");
@@ -922,6 +922,19 @@ setTeamBagIssueMessage("");
     (item) => item.team_bag_id === selectedTeamBagId
   );
 
+  const selectedBag = teamBags.find(
+    (bag) => bag.id === selectedTeamBagId
+  );
+
+  if (!selectedBag) {
+    setTeamBagReturnMessage("Teamtas kon niet worden gevonden.");
+    return;
+  }
+
+  let calculatedChargeAmount = 0;
+
+  // Eerst alle ingevoerde aantallen controleren en het bedrag berekenen.
+  // Er wordt hier nog niets in de database gewijzigd.
   for (const item of contents) {
     const actualQuantity =
       teamBagReturnActual[item.id] ?? item.actual_quantity;
@@ -940,99 +953,88 @@ setTeamBagIssueMessage("");
       return;
     }
 
-    const { error } = await supabase
-      .from("team_bag_contents")
-      .update({
-        actual_quantity: actualQuantity,
-        damaged_quantity: damagedQuantity,
-      })
-      .eq("id", item.id);
+    const missingQuantity = Math.max(
+      item.expected_quantity - actualQuantity,
+      0
+    );
 
-    if (error) {
-      setTeamBagReturnMessage(
-        "Inhoud van de teamtas kon niet worden opgeslagen: " +
-          error.message
-      );
-      return;
-    }
+    const article = articleTypes.find(
+      (articleType) => articleType.id === item.article_type_id
+    );
+
+    const price = article?.charge_amount ?? 0;
+
+    calculatedChargeAmount +=
+      (missingQuantity + damagedQuantity) * price;
   }
-const selectedBag = teamBags.find(
-  (bag) => bag.id === selectedTeamBagId
-);
 
-if (!selectedBag) {
-  setTeamBagReturnMessage("Teamtas kon niet worden gevonden.");
-  return;
-}
-let calculatedChargeAmount = 0;
+  setTeamBagCalculatedChargeAmount(calculatedChargeAmount);
 
-for (const item of contents) {
-  const actualQuantity =
-    teamBagReturnActual[item.id] ?? item.actual_quantity;
+  // Alleen als er daadwerkelijk kosten zijn, moet een financiële
+  // afhandeling worden gekozen.
+  if (calculatedChargeAmount > 0 && !teamBagChargeStatus) {
+    setTeamBagReturnMessage(
+      "Kies eerst de financiële afhandeling."
+    );
+    return;
+  }
 
-  const damagedQuantity =
-    teamBagReturnDamaged[item.id] ?? item.damaged_quantity;
+  if (
+    calculatedChargeAmount > 0 &&
+    teamBagChargeStatus === "charged" &&
+    !teamBagPaymentStatus
+  ) {
+    setTeamBagReturnMessage(
+      "Kies eerst Betaald of Betaling geweigerd."
+    );
+    return;
+  }
 
-  const missingQuantity = Math.max(
-    item.expected_quantity - actualQuantity,
-    0
-  );
+  const returnedAt = new Date().toISOString();
 
-  const article = articleTypes.find(
-    (articleType) => articleType.id === item.article_type_id
-  );
+  const { error: historyError } = await supabase
+    .from("team_bag_history")
+    .insert({
+      team_bag_id: selectedBag.id,
+      holder_name: selectedBag.holder_name,
+      holder_last_name: selectedBag.holder_last_name,
+      holder_mail: selectedBag.holder_mail,
+      holder_phone: selectedBag.holder_phone,
+      issued_at: selectedBag.issued_at,
+      returned_at: returnedAt,
+      status: "returned",
+      notes: null,
+    });
 
-  const price = article?.charge_amount ?? 0;
+  if (historyError) {
+    setTeamBagReturnMessage(
+      "Historie kon niet worden opgeslagen: " +
+        historyError.message
+    );
+    return;
+  }
 
-  calculatedChargeAmount +=
-    (missingQuantity + damagedQuantity) * price;
-}
-setTeamBagCalculatedChargeAmount(calculatedChargeAmount);
-
-const returnedAt = new Date().toISOString();
-
-const { error: historyError } = await supabase
-  .from("team_bag_history")
-  .insert({
-    team_bag_id: selectedBag.id,
-    holder_name: selectedBag.holder_name,
-    holder_last_name: selectedBag.holder_last_name,
-    holder_mail: selectedBag.holder_mail,
-    holder_phone: selectedBag.holder_phone,
-    issued_at: selectedBag.issued_at,
-    returned_at: returnedAt,
-    status: "returned",
-    notes: null,
-  });
-
-if (historyError) {
-  setTeamBagReturnMessage(
-    "Historie kon niet worden opgeslagen: " +
-      historyError.message
-  );
-  return;
-}
   const { error: bagError } = await supabase
     .from("team_bags")
- .update({
-  status: "returned",
-  returned_at: returnedAt,
- charge_status:
-  calculatedChargeAmount === 0
-    ? "no_charge"
-    : teamBagChargeStatus === "charged"
-      ? teamBagPaymentStatus
-      : teamBagChargeStatus,
-  charge_amount:
-    teamBagChargeStatus === "charged"
-      ? calculatedChargeAmount
-      : null,
-  paid_at:
-    teamBagChargeStatus === "charged" &&
-    teamBagPaymentStatus === "paid"
-      ? returnedAt.split("T")[0]
-      : null,
-})
+    .update({
+      status: "returned",
+      returned_at: returnedAt,
+      charge_status:
+        calculatedChargeAmount === 0
+          ? "no_charge"
+          : teamBagChargeStatus === "charged"
+            ? teamBagPaymentStatus
+            : teamBagChargeStatus,
+      charge_amount:
+        teamBagChargeStatus === "charged"
+          ? calculatedChargeAmount
+          : null,
+      paid_at:
+        teamBagChargeStatus === "charged" &&
+        teamBagPaymentStatus === "paid"
+          ? returnedAt.split("T")[0]
+          : null,
+    })
     .eq("id", selectedTeamBagId);
 
   if (bagError) {
@@ -1042,9 +1044,49 @@ if (historyError) {
     return;
   }
 
-  setTeamBagReturnMessage("Teamtas is succesvol ingenomen.");
+  // De retour is nu akkoord.
+  // Wat bruikbaar terugkomt, wordt de nieuwe inhoud én de nieuwe
+  // verwachting voor de volgende uitgifte.
+  for (const item of contents) {
+    const actualQuantity =
+      teamBagReturnActual[item.id] ?? item.actual_quantity;
 
-  await loadDashboard();
+    const damagedQuantity =
+      teamBagReturnDamaged[item.id] ?? item.damaged_quantity;
+
+    const usableQuantity = Math.max(
+      actualQuantity - damagedQuantity,
+      0
+    );
+
+    const { error: contentError } = await supabase
+      .from("team_bag_contents")
+      .update({
+        expected_quantity: usableQuantity,
+        actual_quantity: usableQuantity,
+        damaged_quantity: 0,
+      })
+      .eq("id", item.id);
+
+    if (contentError) {
+      setTeamBagReturnMessage(
+        "Teamtas is ingenomen, maar de nieuwe inhoud kon niet volledig worden opgeslagen: " +
+          contentError.message
+      );
+      return;
+    }
+  }
+
+setTeamBagReturnActual({});
+setTeamBagReturnDamaged({});
+setTeamBagChargeStatus("");
+setTeamBagPaymentStatus("");
+setTeamBagChargeAmount("");
+setTeamBagCalculatedChargeAmount(0);
+
+await loadDashboard();
+
+setTeamBagReturnMessage("Teamtas is succesvol ingenomen.");
 }
 async function saveAwayBagCheck() {
   setTeamBagReturnMessage("");
@@ -4016,11 +4058,13 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
     >
       <option value="">Kledingstuk</option>
       {articleTypes
-        .filter(
-          (article) =>
-            article.name === "Uitwedstrijdshirt" ||
-            article.name === "Uitwedstrijdbroek"
-        )
+      .filter(
+  (article) =>
+    article.name === "Uittenue wedstrijdshirt" ||
+    article.name === "Uittenue wedstrijdbroek" ||
+    article.name === "Uittenue keepersshirt" ||
+    article.name === "Uittenue keepersbroek"
+)
         .map((article) => (
           <option key={article.id} value={article.id}>
             {article.name}
