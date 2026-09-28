@@ -222,7 +222,7 @@ const [teamBagCalculatedChargeAmount, setTeamBagCalculatedChargeAmount] =
 const [teamBagReturnActual, setTeamBagReturnActual] = useState<Record<number, number>>({});
 const [teamBagReturnDamaged, setTeamBagReturnDamaged] = useState<Record<number, number>>({});
 const [teamBagContents, setTeamBagContents] = useState<TeamBagContent[]>([]);
-const [newBagArticleId, setNewBagArticleId] = useState<number | null>(5);
+const [newBagArticleId, setNewBagArticleId] = useState<number | null>(null);
 const [newBagSizeId, setNewBagSizeId] = useState<number | null>(null);
 const [newBagQuantity, setNewBagQuantity] = useState(1);
 const [teamBagChangeContentId, setTeamBagChangeContentId] =
@@ -874,6 +874,42 @@ async function addTeamBagContent() {
     return;
   }
 
+  // Normale teamtas met een bestaande regel:
+  // verhoog de bestaande aantallen in plaats van een dubbele regel aan te maken.
+  if (selectedBag.team_id !== null && existingContent) {
+    const { error } = await supabase
+      .from("team_bag_contents")
+      .update({
+        expected_quantity:
+          existingContent.expected_quantity + newBagQuantity,
+        actual_quantity:
+          existingContent.actual_quantity + newBagQuantity,
+      })
+      .eq("id", existingContent.id);
+
+    if (error) {
+      setTeamBagContentMessage(
+        "Kledingstuk kon niet aan de teamtas worden toegevoegd: " +
+          error.message
+      );
+      return;
+    }
+
+    setNewBagArticleId(null);
+    setNewBagSizeId(null);
+    setNewBagQuantity(1);
+
+    setTeamBagReturnActual({});
+    setTeamBagReturnDamaged({});
+
+    await loadDashboard();
+
+    setTeamBagContentMessage(
+      "Kledingstuk is succesvol aan de teamtas toegevoegd."
+    );
+    return;
+  }
+
   const { error } = await supabase
     .from("team_bag_contents")
     .insert({
@@ -908,6 +944,7 @@ async function addTeamBagContent() {
       : "Kledingstuk is succesvol aan de teamtas toegevoegd."
   );
 }
+
 async function changeTeamBagSize() {
   setTeamBagChangeMessage("");
 
@@ -1083,7 +1120,7 @@ async function removeTeamBagContent() {
     }
   }
 
-  setNewBagArticleId(5);
+  setNewBagArticleId(null);
   setNewBagSizeId(null);
   setNewBagQuantity(1);
 
@@ -4041,6 +4078,7 @@ onChange={(e) => {
     }
     className="rounded-lg border border-gray-300 px-3 py-2"
   >
+<option value="">Kies kledingstuk</option>
    {articleTypes
   .filter((article) =>
     [5, 6, 7, 19].includes(article.id)
