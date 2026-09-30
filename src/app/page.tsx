@@ -10,6 +10,7 @@ type MemberSummary = {
   member_type: string | null;
 email: string | null;
 phone: string | null;
+knvb_number: string | null;
   expected_total: number | string | null;
   issued_total: number | string | null;
   missing_total: number | string | null;
@@ -109,6 +110,7 @@ holder_mail: string | null;
 holder_phone: string | null;
 issued_at: string | null;
 returned_at: string | null;
+notes: string | null;
 };
 type TeamBagContent = {
   id: number;
