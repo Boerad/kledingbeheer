@@ -189,6 +189,7 @@ const [newMemberLastName, setNewMemberLastName] = useState("");
 const [newMemberTypeId, setNewMemberTypeId] = useState<number | null>(null);
 const [newMemberEmail, setNewMemberEmail] = useState("");
 const [newMemberPhone, setNewMemberPhone] = useState("");
+const [newMemberKnvbNumber, setNewMemberKnvbNumber] = useState("");
   const [loading, setLoading] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
   const [memberCount, setMemberCount] = useState(0);
@@ -203,6 +204,8 @@ const [newTeamMessageType, setNewTeamMessageType] =
   useState<"success" | "error">("success");
 const [teamBags, setTeamBags] = useState<TeamBag[]>([]);
 const [teamBagContentMessage, setTeamBagContentMessage] = useState("");
+const [teamBagNotes, setTeamBagNotes] = useState("");
+const [teamBagNotesMessage, setTeamBagNotesMessage] = useState("");
 const [selectedTeamBagId, setSelectedTeamBagId] = useState<number | null>(null);
 const [teamBagHolderName, setTeamBagHolderName] = useState("");
 const [teamBagHolderLastName, setTeamBagHolderLastName] = useState("");
@@ -292,6 +295,10 @@ const [memberSearch, setMemberSearch] = useState("");
 const [memberSort, setMemberSort] =
   useState<"firstName" | "lastName" | "type">("firstName");
 const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
+const [editMemberEmail, setEditMemberEmail] = useState("");
+const [editMemberPhone, setEditMemberPhone] = useState("");
+const [editMemberKnvbNumber, setEditMemberKnvbNumber] = useState("");
+const [editMemberMessage, setEditMemberMessage] = useState("");
 const [clothingDetails, setClothingDetails] = useState<ClothingStatus[]>([]);
 const [availableItems, setAvailableItems] = useState<IndividualItem[]>([]);
 const [inventoryItems, setInventoryItems] = useState<IndividualItem[]>([]);
@@ -567,6 +574,7 @@ const [newStockSizeId, setNewStockSizeId] = useState<number | null>(null);
 const [newStockNumber, setNewStockNumber] = useState("");
 const [newStockWithoutNumber, setNewStockWithoutNumber] = useState(false);
 const [newStockQuantity, setNewStockQuantity] = useState(1);
+const [newStockCondition, setNewStockCondition] = useState<"good" | "damaged">("good");
 const [issueMessages, setIssueMessages] = useState<
   Record<string, string>
 >({});
@@ -1393,6 +1401,7 @@ async function addMember() {
         member_type_id: newMemberTypeId,
         email: newMemberEmail.trim() || null,
         phone: newMemberPhone.trim() || null,
+        knvb_number: newMemberKnvbNumber.trim() || null,
         active: true,
       },
     ]);
@@ -1409,6 +1418,7 @@ async function addMember() {
   setNewMemberTypeId(null);
   setNewMemberEmail("");
   setNewMemberPhone("");
+  setNewMemberKnvbNumber("");
 
   await loadDashboard();
 }
@@ -1864,51 +1874,72 @@ async function markFoundItemReturned(foundItemId: number) {
 }
 async function addStockItem() {
   setMessage("");
+  setStockMessage("");
 
-if (
-  newStockArticleId === null ||
-  (newStockSizeId === null && ![12, 13].includes(newStockArticleId))
-) {
+  if (
+    newStockArticleId === null ||
+    (newStockSizeId === null && ![12, 13].includes(newStockArticleId))
+  ) {
     setMessage("Kies eerst een kledingstuk en een maat.");
     return;
   }
- if (!newStockWithoutNumber && !newStockNumber.trim()) {
+
+  if (!newStockWithoutNumber && !newStockNumber.trim()) {
     setMessage("Vul een nummer in of kies Geen nummer.");
     return;
   }
-const stockItems = Array.from(
-  { length: newStockWithoutNumber ? newStockQuantity : 1 },
-  () => ({
-    article_type_id: newStockArticleId,
-    size_id: newStockSizeId,
-    unique_number: newStockWithoutNumber
-      ? null
-      : newStockNumber.trim(),
-    status: "available",
-    condition: "good",
-  })
-);
 
-const { error } = await supabase
-  .from("individual_items")
-  .insert(stockItems);
+  if (newStockWithoutNumber && newStockQuantity < 1) {
+    setMessage("Aantal moet minimaal 1 zijn.");
+    return;
+  }
 
-if (error) {
-  setMessage("Voorraad kon niet worden toegevoegd: " + error.message);
-  return;
+  const { error } = await supabase.rpc("add_inventory_stock", {
+    p_article_type_id: newStockArticleId,
+    p_size_id: newStockSizeId,
+    p_unique_number: newStockWithoutNumber ? null : newStockNumber.trim(),
+    p_quantity: newStockWithoutNumber ? newStockQuantity : 1,
+    p_condition: newStockCondition,
+  });
+
+  if (error) {
+    setMessage("Voorraad kon niet worden toegevoegd: " + error.message);
+    return;
+  }
+
+  setStockMessage(
+    newStockWithoutNumber
+      ? `${newStockQuantity} kledingstukken zijn toegevoegd aan de voorraad.`
+      : `Kledingstuk ${newStockNumber.trim()} is toegevoegd aan de voorraad.`
+  );
+  setNewStockArticleId(null);
+  setNewStockSizeId(null);
+  setNewStockNumber("");
+  setNewStockWithoutNumber(false);
+  setNewStockQuantity(1);
+  setNewStockCondition("good");
+  await loadDashboard();
 }
 
-setStockMessage(
-  newStockWithoutNumber
-    ? `${newStockQuantity} kledingstukken zijn toegevoegd aan de voorraad.`
-    : `Kledingstuk ${newStockNumber.trim()} is toegevoegd aan de voorraad.`
-);
-setNewStockArticleId(null);
-setNewStockSizeId(null);
-setNewStockNumber("");
-setNewStockWithoutNumber(false);
-setNewStockQuantity(1);
-await loadDashboard(); 
+async function undoLastStockAdd() {
+  const confirmed = window.confirm(
+    "Weet je zeker dat je de laatste voorraad-invoer wilt herstellen?"
+  );
+
+  if (!confirmed) return;
+
+  setMessage("");
+  setStockMessage("");
+
+  const { error } = await supabase.rpc("undo_last_inventory_add");
+
+  if (error) {
+    setMessage("Laatste invoer kon niet worden hersteld: " + error.message);
+    return;
+  }
+
+  setStockMessage("De laatste voorraad-invoer is hersteld.");
+  await loadDashboard();
 }
 async function loadSizes() {
   const { data, error } = await supabase
@@ -2338,6 +2369,46 @@ setReturnMessages({
 });
 }
 
+async function saveMemberContactDetails() {
+  if (selectedMemberId === null) return;
+
+  setEditMemberMessage("");
+  const { error } = await supabase
+    .from("members")
+    .update({
+      email: editMemberEmail.trim() || null,
+      phone: editMemberPhone.trim() || null,
+      knvb_number: editMemberKnvbNumber.trim() || null,
+    })
+    .eq("id", selectedMemberId);
+
+  if (error) {
+    setEditMemberMessage("Gegevens konden niet worden opgeslagen: " + error.message);
+    return;
+  }
+
+  await loadDashboard();
+  setEditMemberMessage("Persoonsgegevens zijn opgeslagen.");
+}
+
+async function saveTeamBagNotes() {
+  if (selectedTeamBagId === null) return;
+
+  setTeamBagNotesMessage("");
+  const { error } = await supabase
+    .from("team_bags")
+    .update({ notes: teamBagNotes.trim() || null })
+    .eq("id", selectedTeamBagId);
+
+  if (error) {
+    setTeamBagNotesMessage("Notitie kon niet worden opgeslagen: " + error.message);
+    return;
+  }
+
+  await loadDashboard();
+  setTeamBagNotesMessage("Notitie is opgeslagen.");
+}
+
 async function loadMemberDetails(memberId: number) {
   const { data, error } = await supabase
     .from("member_clothing_status")
@@ -2357,6 +2428,11 @@ setMessage("");
 const selectedMember = members.find(
   (member) => member.member_id === memberId
 );
+
+setEditMemberEmail(selectedMember?.email ?? "");
+setEditMemberPhone(selectedMember?.phone ?? "");
+setEditMemberKnvbNumber(selectedMember?.knvb_number ?? "");
+setEditMemberMessage("");
 
 const selectedMemberTypeId =
   selectedMember?.member_type
@@ -2396,7 +2472,7 @@ async function loadDashboard() {
 const { data: memberContactData, error: memberContactError } =
   await supabase
     .from("members")
-    .select("id, email, phone");
+    .select("id, email, phone, knvb_number");
     if (membersError) {
       setMessage(
         "Kledinggegevens konden niet worden geladen: " +
@@ -2414,6 +2490,7 @@ const { data: memberContactData, error: memberContactError } =
     ...member,
     email: contact?.email ?? null,
     phone: contact?.phone ?? null,
+    knvb_number: contact?.knvb_number ?? null,
   };
 });
 
@@ -2448,7 +2525,7 @@ if (teamError) {
 const { data: teamBagData, error: teamBagError } = await supabase
   .from("team_bags")
   .select(
-    "id, name, team_id, season_id, status, holder_name, holder_last_name, holder_mail, holder_phone, issued_at, returned_at"
+    "id, name, team_id, season_id, status, holder_name, holder_last_name, holder_mail, holder_phone, issued_at, returned_at, notes"
   )
   .order("name", { ascending: true });
 if (teamBagError) {
@@ -3393,18 +3470,25 @@ const item = foundItem.individual_items;
       ))}
     </select>
 )}
-<input
-  type="text"
-  placeholder="Nummer"
-  value={newStockNumber}
-  onChange={(e) => setNewStockNumber(e.target.value)}
-  className="rounded-lg border border-gray-300 px-3 py-2"
-/>
+{!newStockWithoutNumber && (
+  <input
+    type="text"
+    placeholder="Nummer"
+    value={newStockNumber}
+    onChange={(e) => setNewStockNumber(e.target.value)}
+    className="rounded-lg border border-gray-300 px-3 py-2"
+  />
+)}
 <label className="flex items-center gap-2 text-sm text-gray-600">
   <input
     type="checkbox"
     checked={newStockWithoutNumber}
-    onChange={(e) => setNewStockWithoutNumber(e.target.checked)}
+    onChange={(e) => {
+      const checked = e.target.checked;
+      setNewStockWithoutNumber(checked);
+      if (checked) setNewStockNumber("");
+      if (!checked) setNewStockQuantity(1);
+    }}
   />
   Geen nummer
 </label>
@@ -3421,12 +3505,29 @@ const item = foundItem.individual_items;
     className="w-24 rounded-lg border border-gray-300 px-3 py-2"
   />
 )}
+<select
+  value={newStockCondition}
+  onChange={(e) =>
+    setNewStockCondition(e.target.value as "good" | "damaged")
+  }
+  className="rounded-lg border border-gray-300 px-3 py-2"
+>
+  <option value="good">Goed</option>
+  <option value="damaged">Beschadigd</option>
+</select>
 <button
   type="button"
   onClick={addStockItem}
   className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
 >
   Toevoegen
+</button>
+<button
+  type="button"
+  onClick={undoLastStockAdd}
+  className="rounded-lg border border-red-700 bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+>
+  ⚠ Laatste invoer herstellen
 </button>
 {stockMessage && (
   <p className="mt-2 text-sm text-green-600">
@@ -3672,6 +3773,8 @@ const item = foundItem.individual_items;
   );
 
   setTeamBagReturnMessage("");
+  setTeamBagNotes(bag.notes ?? "");
+  setTeamBagNotesMessage("");
 }}
   className="cursor-pointer border-b border-gray-100 hover:bg-gray-50"
 >
@@ -3702,6 +3805,20 @@ const item = foundItem.individual_items;
   Inhoud wedstrijdtas{" "}
   {teamBags.find((bag) => bag.id === selectedTeamBagId)?.name}
 </h3>
+<div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+  <label className="block text-sm font-medium text-gray-900">Notitie wedstrijdtas</label>
+  <textarea
+    value={teamBagNotes}
+    onChange={(e) => setTeamBagNotes(e.target.value)}
+    placeholder="Bijvoorbeeld: shirts met rugnummers, bijzonderheden of afspraken."
+    rows={3}
+    className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2"
+  />
+  <div className="mt-2 flex items-center gap-3">
+    <button type="button" onClick={saveTeamBagNotes} className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700">Notitie opslaan</button>
+    {teamBagNotesMessage && <span className="text-sm text-gray-600">{teamBagNotesMessage}</span>}
+  </div>
+</div>
 {(() => {
   const selectedBag = teamBags.find(
     (bag) => bag.id === selectedTeamBagId
@@ -4545,63 +4662,76 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
     Persoon toevoegen
   </h2>
 
-  <div className="mt-4 flex flex-wrap items-center gap-3">
-    <input
-      type="text"
-      placeholder="Voornaam"
-      value={newMemberFirstName}
-      onChange={(e) => setNewMemberFirstName(e.target.value)}
-      className="rounded-lg border border-gray-300 px-3 py-2"
-    />
+  <div className="mt-4 space-y-3">
+    <div className="flex flex-wrap items-center gap-3">
+      <input
+        type="text"
+        placeholder="Voornaam"
+        value={newMemberFirstName}
+        onChange={(e) => setNewMemberFirstName(e.target.value)}
+        className="rounded-lg border border-gray-300 px-3 py-2"
+      />
 
-    <input
-      type="text"
-      placeholder="Achternaam"
-      value={newMemberLastName}
-      onChange={(e) => setNewMemberLastName(e.target.value)}
-      className="rounded-lg border border-gray-300 px-3 py-2"
-    />
+      <input
+        type="text"
+        placeholder="Achternaam"
+        value={newMemberLastName}
+        onChange={(e) => setNewMemberLastName(e.target.value)}
+        className="rounded-lg border border-gray-300 px-3 py-2"
+      />
 
-    <select
-      value={newMemberTypeId ?? ""}
-      onChange={(e) =>
-        setNewMemberTypeId(
-          e.target.value ? Number(e.target.value) : null
-        )
-      }
-      className="rounded-lg border border-gray-300 px-3 py-2"
-    >
-      <option value="">Kies type</option>
-      <option value="1">Speler</option>
-      <option value="2">Selectiespeler</option>
-      <option value="3">Trainer</option>
-    </select>
+      <input
+        type="email"
+        placeholder="E-mailadres"
+        value={newMemberEmail}
+        onChange={(e) => setNewMemberEmail(e.target.value)}
+        className="rounded-lg border border-gray-300 px-3 py-2"
+      />
 
-    <input
-      type="email"
-      placeholder="E-mailadres"
-      value={newMemberEmail}
-      onChange={(e) => setNewMemberEmail(e.target.value)}
-      className="rounded-lg border border-gray-300 px-3 py-2"
-    />
+      <input
+        type="tel"
+        placeholder="Telefoonnummer"
+        value={newMemberPhone}
+        onChange={(e) => setNewMemberPhone(e.target.value)}
+        className="rounded-lg border border-gray-300 px-3 py-2"
+      />
 
-    <input
-      type="tel"
-      placeholder="Telefoonnummer"
-      value={newMemberPhone}
-      onChange={(e) => setNewMemberPhone(e.target.value)}
-      className="rounded-lg border border-gray-300 px-3 py-2"
-    />
+      <input
+        type="text"
+        placeholder="KNVB-nummer"
+        value={newMemberKnvbNumber}
+        onChange={(e) => setNewMemberKnvbNumber(e.target.value)}
+        className="rounded-lg border border-gray-300 px-3 py-2"
+      />
+    </div>
 
-    <button
-      type="button"
-      onClick={addMember}
-      className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
-    >
-      Toevoegen
-    </button>
+    <div className="flex flex-wrap items-center gap-3">
+      <select
+        value={newMemberTypeId ?? ""}
+        onChange={(e) =>
+          setNewMemberTypeId(
+            e.target.value ? Number(e.target.value) : null
+          )
+        }
+        className="rounded-lg border border-gray-300 px-3 py-2"
+      >
+        <option value="">Kies type</option>
+        <option value="1">Speler</option>
+        <option value="2">Selectiespeler</option>
+        <option value="3">Trainer</option>
+      </select>
+
+      <button
+        type="button"
+        onClick={addMember}
+        className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+      >
+        Toevoegen
+      </button>
+    </div>
+
 {message === "Persoon is succesvol toegevoegd." && (
-  <p className="mt-2 text-sm text-green-600">
+  <p className="text-sm text-green-600">
     {message}
   </p>
 )}
@@ -4718,6 +4848,16 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
   {members.find((member) => member.member_id === selectedMemberId)
     ?.last_name}
 </h2>
+    </div>
+    <div className="border-b border-gray-200 bg-gray-50 px-6 py-4">
+      <p className="mb-3 text-sm font-semibold text-gray-900">Persoonsgegevens aanpassen</p>
+      <div className="flex flex-wrap items-center gap-3">
+        <input type="email" placeholder="E-mail" value={editMemberEmail} onChange={(e) => setEditMemberEmail(e.target.value)} className="min-w-64 rounded-lg border border-gray-300 px-3 py-2" />
+        <input type="text" placeholder="Telefoon" value={editMemberPhone} onChange={(e) => setEditMemberPhone(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2" />
+        <input type="text" placeholder="KNVB-nummer" value={editMemberKnvbNumber} onChange={(e) => setEditMemberKnvbNumber(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2" />
+        <button type="button" onClick={saveMemberContactDetails} className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700">Gegevens opslaan</button>
+      </div>
+      {editMemberMessage && <p className="mt-2 text-sm text-gray-600">{editMemberMessage}</p>}
     </div>
 {selectedMemberFoundItems.length > 0 && (
   <div className="border-b border-gray-200 bg-yellow-50 px-6 py-4">
