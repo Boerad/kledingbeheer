@@ -15,6 +15,7 @@ knvb_number: string | null;
   issued_total: number | string | null;
   missing_total: number | string | null;
   clothing_status: string | null;
+  active: boolean;
 };
 
 type ClothingStatus = {
@@ -87,6 +88,16 @@ charge_amount: number | null;
   size: string | null;
   condition: string | null;
   issued_date: string;
+};
+type OldMemberHistoryItem = {
+  id: number;
+  individual_item_id: number;
+  member_id: number;
+  issued_date: string | null;
+  returned_date: string | null;
+  condition_at_return: string | null;
+  return_reason: string | null;
+  individual_items: { unique_number: string | null; article_type_id: number; size_id: number | null } | null;
 };
 type TeamBagDifference = {
   id: number;
@@ -199,6 +210,13 @@ const [newMemberKnvbNumber, setNewMemberKnvbNumber] = useState("");
   const [missingTotal, setMissingTotal] = useState(0);
   const [teamBagsWithShortage, setTeamBagsWithShortage] = useState(0);
 const [members, setMembers] = useState<MemberSummary[]>([]);
+const [oldMembers, setOldMembers] = useState<MemberSummary[]>([]);
+const [oldMemberSearch, setOldMemberSearch] = useState("");
+const [oldMemberMessage, setOldMemberMessage] = useState("");
+const [selectedOldMemberId, setSelectedOldMemberId] = useState<number | null>(null);
+const [oldMemberHistory, setOldMemberHistory] = useState<OldMemberHistoryItem[]>([]);
+const [oldMemberHistoryMessage, setOldMemberHistoryMessage] = useState("");
+const [inventoryAssignments, setInventoryAssignments] = useState<CurrentAssignment[]>([]);
 const [teams, setTeams] = useState<Team[]>([]);
 const [newTeamName, setNewTeamName] = useState("");
 const [newTeamMessage, setNewTeamMessage] = useState("");
@@ -213,6 +231,13 @@ const [teamBagHolderName, setTeamBagHolderName] = useState("");
 const [teamBagHolderLastName, setTeamBagHolderLastName] = useState("");
 const [teamBagHolderMail, setTeamBagHolderMail] = useState("");
 const [teamBagHolderPhone, setTeamBagHolderPhone] = useState("");
+const [teamBagEditMode, setTeamBagEditMode] = useState(false);
+const [teamBagEditName, setTeamBagEditName] = useState("");
+const [teamBagEditLastName, setTeamBagEditLastName] = useState("");
+const [teamBagEditMail, setTeamBagEditMail] = useState("");
+const [teamBagEditPhone, setTeamBagEditPhone] = useState("");
+const [teamBagEditIssuedAt, setTeamBagEditIssuedAt] = useState("");
+const [teamBagEditMessage, setTeamBagEditMessage] = useState("");
 const [teamBagIssueMessage, setTeamBagIssueMessage] = useState("");
 const [teamBagReturnMessage, setTeamBagReturnMessage] = useState("");
 const [teamBagChargeStatus, setTeamBagChargeStatus] = useState<
@@ -393,7 +418,8 @@ const filteredInventoryItems = selectedGroup
   : inventoryItems;
 const filteredMembers = members.filter((member) => {
   const matchesGroup =
-    selectedGroup === null || member.member_type === selectedGroup;
+    member.active &&
+    (selectedGroup === null || member.member_type === selectedGroup);
 
   const fullName = `${member.first_name ?? ""} ${member.last_name ?? ""}`
     .toLowerCase()
@@ -404,6 +430,17 @@ const filteredMembers = members.filter((member) => {
     fullName.includes(memberSearch.toLowerCase().trim());
 
   return matchesGroup && matchesSearch;
+});
+
+const filteredOldMembers = oldMembers.filter((member) => {
+  const fullName = `${member.first_name ?? ""} ${member.last_name ?? ""}`
+    .toLowerCase()
+    .trim();
+  return (
+    oldMemberSearch.trim() === "" ||
+    fullName.includes(oldMemberSearch.toLowerCase().trim()) ||
+    (member.knvb_number ?? "").toLowerCase().includes(oldMemberSearch.toLowerCase().trim())
+  );
 });
 filteredMembers.sort((a, b) => {
   if (memberSort === "type") {
@@ -522,6 +559,9 @@ const inventorySummary: InventorySummary[] = articleTypes
     damaged: items.filter((item) => item.status === "damaged").length,
   };
 });
+const incompleteInventoryItems = inventoryItems.filter(
+  (item) => item.status === "incomplete"
+);
 const [currentAssignments, setCurrentAssignments] = useState<CurrentAssignment[]>([]);
 const [returnConditions, setReturnConditions] = useState<
   Record<number, "good" | "damaged">
@@ -619,20 +659,37 @@ async function loadAvailableItems(articleTypeId: number) {
   setAvailableItems((data ?? []) as IndividualItem[]);
 }
 async function loadInventoryItems() {
-  const { data, error } = await supabase
-    .from("individual_items")
-    .select(
-      "id, article_type_id, size_id, unique_number, status, condition"
-    );
+  const pageSize = 1000;
+  let from = 0;
+  const allItems: IndividualItem[] = [];
 
-  if (error) {
-    setMessage(
-      "Voorraad kon niet worden geladen: " + error.message
-    );
-    return;
+  while (true) {
+    const { data, error } = await supabase
+      .from("individual_items")
+      .select(
+        "id, article_type_id, size_id, unique_number, status, condition"
+      )
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (error) {
+      setMessage(
+        "Voorraad kon niet worden geladen: " + error.message
+      );
+      return;
+    }
+
+    const batch = (data ?? []) as IndividualItem[];
+    allItems.push(...batch);
+
+    if (batch.length < pageSize) {
+      break;
+    }
+
+    from += pageSize;
   }
 
-  setInventoryItems((data ?? []) as IndividualItem[]);
+  setInventoryItems(allItems);
 }
 async function loadMemberTypeEntitlements() {
   const { data, error } = await supabase
@@ -1391,6 +1448,40 @@ async function addMember() {
     newMemberTypeId === null
   ) {
     setMessage("Vul voornaam, achternaam en type persoon in.");
+    return;
+  }
+
+  const normalizedFirstName = newMemberFirstName.trim();
+  const normalizedLastName = newMemberLastName.trim();
+  const normalizedKnvb = newMemberKnvbNumber.trim();
+
+  let existingQuery = supabase
+    .from("members")
+    .select("id, first_name, last_name, active, knvb_number")
+    .ilike("first_name", normalizedFirstName)
+    .ilike("last_name", normalizedLastName);
+
+  const { data: existingByName, error: existingCheckError } = await existingQuery;
+
+  if (existingCheckError) {
+    setMessage("Controle op bestaande personen mislukt: " + existingCheckError.message);
+    return;
+  }
+
+  const existingByKnvb = normalizedKnvb
+    ? [...members, ...oldMembers].find(
+        (member) => (member.knvb_number ?? "").toLowerCase() === normalizedKnvb.toLowerCase()
+      )
+    : null;
+
+  const existingPerson = existingByKnvb ?? existingByName?.[0] ?? null;
+
+  if (existingPerson) {
+    setMessage(
+      existingPerson.active
+        ? "Deze persoon bestaat al en is actief."
+        : "Deze persoon bestaat al als oud lid. Zoek de persoon op bij ‘Oud lid zoeken’ en kies Heractiveren."
+    );
     return;
   }
 
@@ -2371,6 +2462,64 @@ setReturnMessages({
 });
 }
 
+async function deactivateMember() {
+  if (selectedMemberId === null) return;
+
+  if (currentAssignments.length > 0) {
+    setEditMemberMessage(
+      "Deze persoon kan nog niet worden uitgeschreven. Neem eerst alle kleding in."
+    );
+    return;
+  }
+
+  const { error } = await supabase
+    .from("members")
+    .update({ active: false })
+    .eq("id", selectedMemberId);
+
+  if (error) {
+    setEditMemberMessage("Uitschrijven mislukt: " + error.message);
+    return;
+  }
+
+  setSelectedMemberId(null);
+  setCurrentAssignments([]);
+  await loadDashboard();
+  setMessage("Persoon is uitgeschreven en blijft beschikbaar via ‘Oud lid zoeken’. ");
+}
+
+async function loadOldMemberHistory(memberId: number) {
+  setOldMemberHistoryMessage("");
+  setSelectedOldMemberId(memberId);
+  const { data, error } = await supabase
+    .from("item_assignments")
+    .select("id, individual_item_id, member_id, issued_date, returned_date, condition_at_return, return_reason, individual_items(unique_number, article_type_id, size_id)")
+    .eq("member_id", memberId)
+    .order("issued_date", { ascending: false });
+  if (error) {
+    setOldMemberHistory([]);
+    setOldMemberHistoryMessage("Kledinghistorie kon niet worden geladen: " + error.message);
+    return;
+  }
+  setOldMemberHistory((data ?? []) as unknown as OldMemberHistoryItem[]);
+}
+
+async function reactivateMember(memberId: number) {
+  setOldMemberMessage("");
+  const { error } = await supabase
+    .from("members")
+    .update({ active: true })
+    .eq("id", memberId);
+
+  if (error) {
+    setOldMemberMessage("Heractiveren mislukt: " + error.message);
+    return;
+  }
+
+  await loadDashboard();
+  setOldMemberMessage("Oud lid is succesvol heractiveerd en staat weer bij Personen.");
+}
+
 async function saveMemberContactDetails() {
   if (selectedMemberId === null) return;
 
@@ -2393,10 +2542,35 @@ async function saveMemberContactDetails() {
   setEditMemberMessage("Persoonsgegevens zijn opgeslagen.");
 }
 
+async function saveTeamBagContactDetails() {
+  if (selectedTeamBagId === null) return;
+  setTeamBagEditMessage("");
+  if (!teamBagEditName.trim() || !teamBagEditLastName.trim()) {
+    setTeamBagEditMessage("Vul voornaam en achternaam in.");
+    return;
+  }
+  const { error } = await supabase.from("team_bags").update({
+    holder_name: teamBagEditName.trim(),
+    holder_last_name: teamBagEditLastName.trim(),
+    holder_mail: teamBagEditMail.trim() || null,
+    holder_phone: teamBagEditPhone.trim() || null,
+    issued_at: teamBagEditIssuedAt ? new Date(`${teamBagEditIssuedAt}T00:00:00`).toISOString() : null,
+  }).eq("id", selectedTeamBagId);
+  if (error) {
+    setTeamBagEditMessage("Gegevens konden niet worden opgeslagen: " + error.message);
+    return;
+  }
+  await loadDashboard();
+  setTeamBagEditMode(false);
+  setTeamBagEditMessage("Contactgegevens zijn opgeslagen.");
+}
+
 async function saveTeamBagNotes() {
   if (selectedTeamBagId === null) return;
 
   setTeamBagNotesMessage("");
+  setTeamBagEditMode(false);
+  setTeamBagEditMessage("");
   const { error } = await supabase
     .from("team_bags")
     .update({ notes: teamBagNotes.trim() || null })
@@ -2474,7 +2648,7 @@ async function loadDashboard() {
 const { data: memberContactData, error: memberContactError } =
   await supabase
     .from("members")
-    .select("id, email, phone, knvb_number");
+    .select("id, first_name, last_name, member_type_id, email, phone, knvb_number, active");
     if (membersError) {
       setMessage(
         "Kledinggegevens konden niet worden geladen: " +
@@ -2493,26 +2667,59 @@ const { data: memberContactData, error: memberContactError } =
     email: contact?.email ?? null,
     phone: contact?.phone ?? null,
     knvb_number: contact?.knvb_number ?? null,
+    active: contact?.active ?? true,
   };
 });
 
-setMembers(memberRows);
+const activeMemberRows = memberRows.filter((member) => member.active);
+setMembers(activeMemberRows);
 
-    setMemberCount(memberRows.length);
+const typeNames: Record<number, string> = { 1: "Speler", 2: "Selectiespeler", 3: "Trainer" };
+const inactiveRows: MemberSummary[] = (memberContactData ?? [])
+  .filter((contact) => contact.active === false)
+  .map((contact) => {
+    const summary = memberRows.find((member) => member.member_id === contact.id);
+    return summary ?? {
+      member_id: contact.id,
+      first_name: contact.first_name,
+      last_name: contact.last_name,
+      member_type: typeNames[contact.member_type_id] ?? null,
+      email: contact.email,
+      phone: contact.phone,
+      knvb_number: contact.knvb_number,
+      expected_total: 0,
+      issued_total: 0,
+      missing_total: 0,
+      clothing_status: null,
+      active: false,
+    };
+  });
+setOldMembers(inactiveRows);
+
+    setMemberCount(activeMemberRows.length);
 
     setIssuedTotal(
-      memberRows.reduce(
+      activeMemberRows.reduce(
         (total, member) => total + Number(member.issued_total ?? 0),
         0
       )
     );
 
     setMissingTotal(
-      memberRows.reduce(
+      activeMemberRows.reduce(
         (total, member) => total + Number(member.missing_total ?? 0),
         0
       )
     );
+const { data: inventoryAssignmentData, error: inventoryAssignmentError } = await supabase
+  .from("current_item_assignments")
+  .select("id, member_id, article, charge_amount, unique_number, size, condition, issued_date, individual_item_id");
+if (inventoryAssignmentError) {
+  console.error("Fout bij laden actuele uitgiftes:", inventoryAssignmentError);
+  setInventoryAssignments([]);
+} else {
+  setInventoryAssignments((inventoryAssignmentData ?? []) as CurrentAssignment[]);
+}
 const { data: teamData, error: teamError } = await supabase
   .from("teams")
   .select("id, name, active")
@@ -2746,7 +2953,7 @@ if (resetMode) {
   if (loggedIn) {
     return (
       <main className="min-h-screen bg-gray-100 p-6">
-        <div className="mx-auto max-w-6xl">
+        <div className="mx-auto w-full max-w-[1600px]">
          <div className="mb-8">
   <div className="flex items-start justify-between">
   <div className="flex items-center gap-4">
@@ -2846,7 +3053,7 @@ if (resetMode) {
 </p>
             </div>
           )}
-<div className="mb-8 grid gap-4 md:grid-cols-4">
+<div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
   <button
     type="button"
    onClick={() => {
@@ -2909,8 +3116,12 @@ if (resetMode) {
     Bekijk gevonden kleding en de bijbehorende eigenaar
   </p>
 </button>
+<button type="button" onClick={() => setActiveSection("incomplete")} className="rounded-2xl bg-white p-6 text-left shadow hover:bg-gray-50">
+  <p className="text-lg font-bold text-gray-900">Incomplete kleding</p>
+  <p className="mt-2 text-sm text-gray-600">Overzicht van bestaande incomplete kledingstukken en presentatieonderdelen</p>
+</button>
 </div>
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-5">
             <div className="rounded-2xl bg-white p-6 shadow">
               <p className="text-sm text-gray-500">
                 Aantal personen
@@ -3431,6 +3642,67 @@ const item = foundItem.individual_items;
   </div>
 )}
 
+{activeSection === "incomplete" && (
+  <div className="mt-8 rounded-2xl bg-white p-6 shadow">
+    <h2 className="text-lg font-bold text-gray-900">Incomplete kleding</h2>
+    <p className="mt-2 text-sm text-gray-600">Overzicht van incomplete presentatiepakken en losse presentatieonderdelen.</p>
+    {incompleteInventoryItems.length === 0 ? (
+      <p className="mt-6 text-sm text-gray-600">Er zijn geen incomplete kledingstukken geregistreerd.</p>
+    ) : (
+      <div className="mt-6 overflow-x-auto">
+        <table className="w-full min-w-[760px] text-left text-sm">
+          <thead className="bg-gray-50"><tr>
+            <SortableTh label="Artikel" sortKey="article" sort={tableSorts["incompleteItems"]} onSort={(key) => toggleTableSort("incompleteItems", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+            <SortableTh label="Nummer" sortKey="number" sort={tableSorts["incompleteItems"]} onSort={(key) => toggleTableSort("incompleteItems", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+            <SortableTh label="Maat" sortKey="size" sort={tableSorts["incompleteItems"]} onSort={(key) => toggleTableSort("incompleteItems", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+            <SortableTh label="Conditie" sortKey="condition" sort={tableSorts["incompleteItems"]} onSort={(key) => toggleTableSort("incompleteItems", key)} className="px-4 py-3 text-sm font-medium text-gray-600" />
+            <th className="px-4 py-3 text-sm font-medium text-gray-600">Actie</th>
+          </tr></thead>
+          <tbody>
+            {sortedRows(
+              "incompleteItems",
+              incompleteInventoryItems,
+              (item, key) => {
+                const article = articleTypes.find((a) => a.id === item.article_type_id);
+                const size = sizes.find((sizeItem) => sizeItem.id === item.size_id);
+                if (key === "article") return article?.name ?? "-";
+                if (key === "number") return item.unique_number ?? "-";
+                if (key === "size") return size?.name ?? "-";
+                if (key === "condition") return item.condition === "damaged" ? "Beschadigd" : "Goed";
+                return "";
+              }
+            ).map((item) => (
+              <tr key={item.id} className="border-t border-gray-100">
+                <td className="px-4 py-3 text-gray-900">{articleTypes.find((a) => a.id === item.article_type_id)?.name ?? "-"}</td>
+                <td className="px-4 py-3 text-gray-600">{item.unique_number ?? "-"}</td>
+                <td className="px-4 py-3 text-gray-600">{sizes.find((size) => size.id === item.size_id)?.name ?? "-"}</td>
+                <td className="px-4 py-3 text-gray-600">{item.condition === "damaged" ? "Beschadigd" : "Goed"}</td>
+                <td className="px-4 py-3">
+                  {item.unique_number ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setItemSearchNumber(item.unique_number ?? "");
+                        setItemSearchArticleId(item.article_type_id);
+                        setActiveSection("gevonden");
+                      }}
+                      className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      Bekijken / afhandelen
+                    </button>
+                  ) : (
+                    <span className="text-sm text-gray-500">Geen nummer</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </div>
+)}
+
 {activeSection === "voorraad" && (
 <div className="mt-8 rounded-2xl bg-white p-6 shadow">
   <h2 className="text-lg font-bold text-gray-900">
@@ -3638,6 +3910,7 @@ const item = foundItem.individual_items;
                   <SortableTh label="Nummer" sortKey="number" sort={tableSorts["inventoryDetails"]} onSort={(key) => toggleTableSort("inventoryDetails", key)} className="px-3 py-2 text-sm font-medium text-gray-600" />
                   <SortableTh label="Maat" sortKey="size" sort={tableSorts["inventoryDetails"]} onSort={(key) => toggleTableSort("inventoryDetails", key)} className="px-3 py-2 text-sm font-medium text-gray-600" />
                   <SortableTh label="Status" sortKey="status" sort={tableSorts["inventoryDetails"]} onSort={(key) => toggleTableSort("inventoryDetails", key)} className="px-3 py-2 text-sm font-medium text-gray-600" />
+                  <SortableTh label="Uitgegeven aan" sortKey="issuedTo" sort={tableSorts["inventoryDetails"]} onSort={(key) => toggleTableSort("inventoryDetails", key)} className="px-3 py-2 text-sm font-medium text-gray-600" />
                 </tr>
               </thead>
 
@@ -3652,6 +3925,7 @@ const item = foundItem.individual_items;
                     if (key === "number") return inventoryItem.unique_number;
                     if (key === "size") return sizes.find((size) => size.id === inventoryItem.size_id)?.name ?? "";
                     if (key === "status") return inventoryItem.status === "available" ? "Beschikbaar" : inventoryItem.status === "issued" ? "Uitgegeven" : inventoryItem.status === "damaged" ? "Beschadigd" : inventoryItem.status;
+                     if (key === "issuedTo") { const assignment = inventoryAssignments.find((a) => a.individual_item_id === inventoryItem.id); const member = assignment ? members.find((m) => m.member_id === assignment.member_id) : null; return member ? `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim() : ""; }
                     return "";
                   }
                 ).map((inventoryItem) => (
@@ -3676,6 +3950,9 @@ const item = foundItem.individual_items;
                           ? "Beschadigd"
                           : inventoryItem.status}
                       </td>
+                       <td className="px-3 py-2 text-sm text-gray-700">
+                         {(() => { const assignment = inventoryAssignments.find((a) => a.individual_item_id === inventoryItem.id); if (!assignment) return "-"; const member = members.find((m) => m.member_id === assignment.member_id); return member ? `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim() : "Onbekende persoon"; })()}
+                       </td>
                     </tr>
                   ))}
               </tbody>
@@ -3862,6 +4139,9 @@ const item = foundItem.individual_items;
           ? new Date(selectedBag.issued_at).toLocaleDateString("nl-NL")
           : "-"}
       </div>
+      <div className="md:col-span-4 mt-1">
+        {!teamBagEditMode && <button type="button" onClick={() => { setTeamBagEditName(selectedBag.holder_name ?? ""); setTeamBagEditLastName(selectedBag.holder_last_name ?? ""); setTeamBagEditMail(selectedBag.holder_mail ?? ""); setTeamBagEditPhone(selectedBag.holder_phone ?? ""); setTeamBagEditIssuedAt(selectedBag.issued_at ? selectedBag.issued_at.slice(0, 10) : ""); setTeamBagEditMessage(""); setTeamBagEditMode(true); }} className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700">Gegevens aanpassen</button>}
+      </div>
 {selectedBag.returned_at && (
   <div>
     <span className="font-medium text-gray-900">
@@ -3873,6 +4153,13 @@ const item = foundItem.individual_items;
     </div>
   );
 })()}
+{teamBagEditMode && (
+  <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+    <div className="grid w-full gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <input type="text" placeholder="Voornaam" value={teamBagEditName} onChange={(e) => setTeamBagEditName(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2" /><input type="text" placeholder="Achternaam" value={teamBagEditLastName} onChange={(e) => setTeamBagEditLastName(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2" /><input type="email" placeholder="E-mailadres" value={teamBagEditMail} onChange={(e) => setTeamBagEditMail(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2" /><input type="tel" placeholder="Telefoonnummer" value={teamBagEditPhone} onChange={(e) => setTeamBagEditPhone(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2" /><input type="date" value={teamBagEditIssuedAt} onChange={(e) => setTeamBagEditIssuedAt(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2" />
+    </div><div className="mt-3 flex flex-wrap items-center gap-2"><button type="button" onClick={saveTeamBagContactDetails} className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700">Opslaan</button><button type="button" onClick={() => setTeamBagEditMode(false)} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Annuleren</button>{teamBagEditMessage && <span className={`text-sm ${teamBagEditMessage.toLowerCase().includes("opgeslagen") ? "text-green-600" : "text-red-600"}`}>{teamBagEditMessage}</span>}</div>
+  </div>
+)}
     <div className="mt-4 overflow-x-auto">
   <table className="w-full text-left">
     <thead className="bg-gray-50">
@@ -4739,6 +5026,66 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
 )}
   </div>
 </div>
+<div className="mt-8 rounded-2xl bg-white p-6 shadow">
+  <h2 className="text-lg font-bold text-gray-900">Oud lid zoeken</h2>
+  <p className="mt-1 text-sm text-gray-600">
+    Zoek uitgeschreven spelers, selectiespelers en trainers. Hun gegevens blijven bewaard en je kunt ze hier heractiveren.
+  </p>
+  <input
+    type="text"
+    value={oldMemberSearch}
+    onChange={(e) => setOldMemberSearch(e.target.value)}
+    placeholder="Zoek op naam of KNVB-nummer"
+    className="mt-4 w-full max-w-md rounded-lg border border-gray-300 px-4 py-2 text-sm"
+  />
+  {oldMemberSearch.trim() !== "" && (
+    <div className="mt-4 space-y-2">
+      {filteredOldMembers.length === 0 ? (
+        <p className="text-sm text-gray-600">Geen oud lid gevonden.</p>
+      ) : (
+        filteredOldMembers.map((member) => (
+          <div key={member.member_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 p-3">
+            <div>
+              <p className="font-medium text-gray-900">{member.first_name} {member.last_name}</p>
+              <p className="text-sm text-gray-600">{member.member_type ?? "-"}{member.knvb_number ? ` — KNVB ${member.knvb_number}` : ""}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => loadOldMemberHistory(member.member_id)} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Bekijken</button>
+              <button type="button" onClick={() => reactivateMember(member.member_id)} className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700">Heractiveren</button>
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  )}
+  {selectedOldMemberId !== null && (() => {
+    const oldMember = oldMembers.find((member) => member.member_id === selectedOldMemberId);
+    return (
+      <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-bold text-gray-900">{oldMember?.first_name ?? ""} {oldMember?.last_name ?? ""}</h3>
+            <p className="mt-1 text-sm text-gray-600">{oldMember?.member_type ?? "-"}{oldMember?.knvb_number ? ` — KNVB ${oldMember.knvb_number}` : ""}</p>
+            <p className="mt-1 text-sm text-gray-600">E-mail: {oldMember?.email ?? "-"} · Telefoon: {oldMember?.phone ?? "-"}</p>
+          </div>
+          <button type="button" onClick={() => { setSelectedOldMemberId(null); setOldMemberHistory([]); setOldMemberHistoryMessage(""); }} className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Sluiten</button>
+        </div>
+        <h4 className="mt-5 font-semibold text-gray-900">Kledinghistorie</h4>
+        {oldMemberHistoryMessage ? <p className="mt-2 text-sm text-red-600">{oldMemberHistoryMessage}</p> : oldMemberHistory.length === 0 ? <p className="mt-2 text-sm text-gray-600">Geen kledinghistorie gevonden.</p> : (
+          <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[720px] text-left text-sm">
+            <thead className="bg-white"><tr><th className="px-3 py-2 font-medium text-gray-600">Kledingstuk</th><th className="px-3 py-2 font-medium text-gray-600">Nummer</th><th className="px-3 py-2 font-medium text-gray-600">Maat</th><th className="px-3 py-2 font-medium text-gray-600">Uitgegeven</th><th className="px-3 py-2 font-medium text-gray-600">Ingeleverd</th><th className="px-3 py-2 font-medium text-gray-600">Conditie retour</th></tr></thead>
+            <tbody>{oldMemberHistory.map((historyItem) => {
+              const historyArticle = articleTypes.find((article) => article.id === historyItem.individual_items?.article_type_id);
+              const historySize = sizes.find((size) => size.id === historyItem.individual_items?.size_id);
+              return <tr key={historyItem.id} className="border-t border-gray-200"><td className="px-3 py-2 text-gray-900">{historyArticle?.name ?? "-"}</td><td className="px-3 py-2 text-gray-600">{historyItem.individual_items?.unique_number ?? "-"}</td><td className="px-3 py-2 text-gray-600">{historySize?.name ?? "-"}</td><td className="px-3 py-2 text-gray-600">{historyItem.issued_date ?? "-"}</td><td className="px-3 py-2 text-gray-600">{historyItem.returned_date ?? "Nog niet ingeleverd"}</td><td className="px-3 py-2 text-gray-600">{historyItem.condition_at_return === "good" ? "Goed" : historyItem.condition_at_return === "damaged" ? "Beschadigd" : historyItem.condition_at_return ?? "-"}</td></tr>;
+            })}</tbody>
+          </table></div>
+        )}
+      </div>
+    );
+  })()}
+  {oldMemberMessage && <p className="mt-3 text-sm text-green-600">{oldMemberMessage}</p>}
+</div>
 <div className="mt-8 overflow-hidden rounded-2xl bg-white shadow">
   <div className="border-b border-gray-200 px-6 py-4">
     <h2 className="text-xl font-bold text-gray-900">
@@ -4858,6 +5205,7 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
         <input type="text" placeholder="Telefoon" value={editMemberPhone} onChange={(e) => setEditMemberPhone(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2" />
         <input type="text" placeholder="KNVB-nummer" value={editMemberKnvbNumber} onChange={(e) => setEditMemberKnvbNumber(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2" />
         <button type="button" onClick={saveMemberContactDetails} className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700">Gegevens opslaan</button>
+        <button type="button" onClick={deactivateMember} className="rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50">Uitschrijven</button>
       </div>
       {editMemberMessage && <p className="mt-2 text-sm text-gray-600">{editMemberMessage}</p>}
     </div>
