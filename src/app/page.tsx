@@ -78,6 +78,10 @@ type InventorySummary = {
   issued: number;
   damaged: number;
 };
+type ItemAssignmentHistory = {
+  individual_item_id: number;
+  returned_date: string | null;
+};
 type CurrentAssignment = {
   id: number;
 individual_item_id: number;
@@ -216,6 +220,9 @@ const [oldMemberMessage, setOldMemberMessage] = useState("");
 const [selectedOldMemberId, setSelectedOldMemberId] = useState<number | null>(null);
 const [oldMemberHistory, setOldMemberHistory] = useState<OldMemberHistoryItem[]>([]);
 const [oldMemberHistoryMessage, setOldMemberHistoryMessage] = useState("");
+const [showMemberHistory, setShowMemberHistory] = useState(false);
+const [memberHistory, setMemberHistory] = useState<OldMemberHistoryItem[]>([]);
+const [memberHistoryMessage, setMemberHistoryMessage] = useState("");
 const [inventoryAssignments, setInventoryAssignments] = useState<CurrentAssignment[]>([]);
 const [teams, setTeams] = useState<Team[]>([]);
 const [newTeamName, setNewTeamName] = useState("");
@@ -319,6 +326,10 @@ function sortedRows<T>(
 }
 const [showFoundItemForm, setShowFoundItemForm] = useState(false);
 const [memberSearch, setMemberSearch] = useState("");
+const [showAllMembers, setShowAllMembers] = useState(false);
+const [showAddMember, setShowAddMember] = useState(false);
+const [showOldMemberSearch, setShowOldMemberSearch] = useState(false);
+const [itemAssignmentHistory, setItemAssignmentHistory] = useState<ItemAssignmentHistory[]>([]);
 const [memberSort, setMemberSort] =
   useState<"firstName" | "lastName" | "type">("firstName");
 const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
@@ -425,9 +436,11 @@ const filteredMembers = members.filter((member) => {
     .toLowerCase()
     .trim();
 
+  const searchTerm = memberSearch.toLowerCase().trim();
   const matchesSearch =
-    memberSearch.trim() === "" ||
-    fullName.includes(memberSearch.toLowerCase().trim());
+    searchTerm === "" ||
+    fullName.includes(searchTerm) ||
+    (member.knvb_number ?? "").toLowerCase().includes(searchTerm);
 
   return matchesGroup && matchesSearch;
 });
@@ -559,9 +572,31 @@ const inventorySummary: InventorySummary[] = articleTypes
     damaged: items.filter((item) => item.status === "damaged").length,
   };
 });
-const incompleteInventoryItems = inventoryItems.filter(
-  (item) => item.status === "incomplete"
+const presentationPartNames = new Set(["Presentatie jack", "Presentatie broek", "Jas PP", "Broek PP"]);
+const presentationPackArticleIds = new Set(
+  articleTypes.filter((article) => article.name === "Presentatiepak").map((article) => article.id)
 );
+const incompleteInventoryItems = inventoryItems.filter((item) => {
+  const articleName = articleTypes.find((article) => article.id === item.article_type_id)?.name;
+  if (item.status !== "incomplete" || !articleName || !presentationPartNames.has(articleName)) return false;
+
+  const matchingPackIds = inventoryItems
+    .filter((pack) =>
+      presentationPackArticleIds.has(pack.article_type_id) &&
+      pack.unique_number === item.unique_number &&
+      pack.size_id === item.size_id
+    )
+    .map((pack) => pack.id);
+
+  if (matchingPackIds.length === 0) return false;
+
+  const matchingAssignments = itemAssignmentHistory.filter((assignment) =>
+    matchingPackIds.includes(assignment.individual_item_id)
+  );
+
+  if (matchingAssignments.some((assignment) => assignment.returned_date === null)) return false;
+  return matchingAssignments.length > 0;
+});
 const [currentAssignments, setCurrentAssignments] = useState<CurrentAssignment[]>([]);
 const [returnConditions, setReturnConditions] = useState<
   Record<number, "good" | "damaged">
@@ -690,6 +725,28 @@ async function loadInventoryItems() {
   }
 
   setInventoryItems(allItems);
+}
+async function loadItemAssignmentHistory() {
+  const pageSize = 1000;
+  let from = 0;
+  const allAssignments: ItemAssignmentHistory[] = [];
+  while (true) {
+    const { data, error } = await supabase
+      .from("item_assignments")
+      .select("individual_item_id, returned_date")
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) {
+      console.error("Fout bij laden uitgiftehistorie:", error);
+      setItemAssignmentHistory([]);
+      return;
+    }
+    const batch = (data ?? []) as ItemAssignmentHistory[];
+    allAssignments.push(...batch);
+    if (batch.length < pageSize) break;
+    from += pageSize;
+  }
+  setItemAssignmentHistory(allAssignments);
 }
 async function loadMemberTypeEntitlements() {
   const { data, error } = await supabase
@@ -1627,12 +1684,14 @@ const results = items.map((item) => {
 
     return `${article?.name ?? "Onbekend kledingstuk"} | Nummer: ${
       item.unique_number ?? "-"
-    } | Maat: ${size?.name ?? "-"} | Uitgegeven aan: ${memberName}`;
+    } | Maat: ${size?.name ?? "-"} | Actief uitgegeven aan: ${memberName}`;
   }
 
+  const availabilityText =
+    item.status === "available" ? "In voorraad" : `Niet actief uitgegeven — status: ${item.status}`;
   return `${article?.name ?? "Onbekend kledingstuk"} | Nummer: ${
     item.unique_number ?? "-"
-  } | Maat: ${size?.name ?? "-"} | Niet uitgegeven`;
+  } | Maat: ${size?.name ?? "-"} | ${availabilityText}`;
 });
 
 setItemSearchResult(results.join("\n"));
@@ -2179,7 +2238,19 @@ setIssueMessages((prev) => ({
     ? `Kledingstuk ${item.unique_number} is succesvol uitgegeven.`
     : "Kledingstuk is succesvol uitgegeven.",
 }));
-  await loadMemberDetails(memberId);
+setIssueNumbers((prev) => ({ ...prev, [groupKey]: "" }));
+setIssueSizes((prev) => {
+  const next = { ...prev };
+  delete next[groupKey];
+  return next;
+});
+setIssueWithoutNumber((prev) => ({ ...prev, [groupKey]: false }));
+setNumberSizeLabels((prev) => {
+  const next = { ...prev };
+  delete next[groupKey];
+  return next;
+});
+await loadMemberDetails(memberId);
 await loadDashboard();
 
 return true;
@@ -2504,6 +2575,38 @@ async function loadOldMemberHistory(memberId: number) {
   setOldMemberHistory((data ?? []) as unknown as OldMemberHistoryItem[]);
 }
 
+function closeMemberDetails() {
+  setSelectedMemberId(null);
+  setCurrentAssignments([]);
+  setClothingDetails([]);
+  setShowMemberHistory(false);
+  setMemberHistory([]);
+  setMemberHistoryMessage("");
+}
+
+async function loadMemberHistory(memberId: number) {
+  setMemberHistoryMessage("");
+  const { data, error } = await supabase
+    .from("item_assignments")
+    .select("id, individual_item_id, member_id, issued_date, returned_date, condition_at_return, return_reason, individual_items(unique_number, article_type_id, size_id)")
+    .eq("member_id", memberId)
+    .not("returned_date", "is", null)
+    .order("issued_date", { ascending: false });
+  if (error) {
+    setMemberHistory([]);
+    setMemberHistoryMessage("Kledinghistorie kon niet worden geladen: " + error.message);
+    return;
+  }
+  setMemberHistory((data ?? []) as unknown as OldMemberHistoryItem[]);
+}
+
+async function toggleMemberHistory() {
+  if (selectedMemberId === null) return;
+  if (showMemberHistory) { setShowMemberHistory(false); return; }
+  await loadMemberHistory(selectedMemberId);
+  setShowMemberHistory(true);
+}
+
 async function reactivateMember(memberId: number) {
   setOldMemberMessage("");
   const { error } = await supabase
@@ -2601,6 +2704,9 @@ async function loadMemberDetails(memberId: number) {
   }
 setMessage("");
   setSelectedMemberId(memberId);
+  setShowMemberHistory(false);
+  setMemberHistory([]);
+  setMemberHistoryMessage("");
 const selectedMember = members.find(
   (member) => member.member_id === memberId
 );
@@ -2822,6 +2928,7 @@ if (foundItemError) {
 setFoundItems((foundItemData ?? []) as unknown as FoundItem[]);
 await loadInventoryItems();
 await loadArticleTypes();
+await loadItemAssignmentHistory();
 await loadSizes();
 await loadMemberTypeEntitlements();
   }
@@ -2952,10 +3059,10 @@ if (resetMode) {
 }
   if (loggedIn) {
     return (
-      <main className="min-h-screen bg-gray-100 p-6">
-        <div className="mx-auto w-full max-w-[1600px]">
+      <main className="min-h-screen bg-gray-100 p-3 sm:p-4 lg:p-6">
+        <div className="mx-auto w-full max-w-[1800px]">
          <div className="mb-8">
-  <div className="flex items-start justify-between">
+  <div className="flex flex-wrap items-start justify-between gap-4">
   <div className="flex items-center gap-4">
   <img
     src="/sc-leovardia-logo.jpg"
@@ -3058,6 +3165,7 @@ if (resetMode) {
     type="button"
    onClick={() => {
   setSelectedGroup("Trainer");
+                  closeMemberDetails();
   setActiveSection("personen");
 }}
     className="rounded-2xl bg-white p-6 text-left shadow hover:bg-gray-50"
@@ -3074,6 +3182,7 @@ if (resetMode) {
     type="button"
   onClick={() => {
   setSelectedGroup("Speler");
+                  closeMemberDetails();
   setActiveSection("personen");
 }}
     className="rounded-2xl bg-white p-6 text-left shadow hover:bg-gray-50"
@@ -3090,6 +3199,7 @@ if (resetMode) {
   type="button"
   onClick={() => {
     setSelectedGroup("Selectiespeler");
+                  closeMemberDetails();
     setActiveSection("personen");
   }}
   className="rounded-2xl bg-white p-6 text-left shadow hover:bg-gray-50"
@@ -3159,6 +3269,16 @@ if (resetMode) {
             </div>
           </div>
 {activeSection === "overzicht" && (
+  <>
+  <div className="mt-8 rounded-2xl bg-white p-6 shadow">
+    <h2 className="text-lg font-bold text-gray-900">Snelle acties</h2>
+    <p className="mt-2 text-sm text-gray-600">Zoek eerst een persoon. Voeg alleen een persoon of voorraad toe als dat nodig is.</p>
+    <div className="mt-4 flex flex-wrap gap-3">
+      <button type="button" onClick={() => { setSelectedGroup(null); setMemberSearch(""); setShowAllMembers(false); setActiveSection("personen"); }} className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700">Persoon zoeken</button>
+      <button type="button" onClick={() => { setSelectedGroup(null); setShowAddMember(true); setActiveSection("personen"); }} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">+ Persoon toevoegen</button>
+      <button type="button" onClick={() => setActiveSection("voorraad")} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">+ Voorraad toevoegen</button>
+    </div>
+  </div>
   <div className="mt-8 rounded-2xl bg-white p-6 shadow">
     <h2 className="text-lg font-bold text-gray-900">
       Item zoeken
@@ -3536,6 +3656,7 @@ onClick={registerFoundItem}
   </div>
 )}
   </div>
+  </>
 )}
 
 {activeSection === "gevonden" && (
@@ -3554,7 +3675,11 @@ onClick={registerFoundItem}
       </p>
     ) : (
       <div className="mt-6 overflow-x-auto">
-        <table className="w-full text-left text-sm">
+        <table className="w-full min-w-[980px] table-fixed text-left text-sm">
+          <colgroup>
+            <col className="w-[20%]" /><col className="w-[9%]" /><col className="w-[8%]" />
+            <col className="w-[13%]" /><col className="w-[17%]" /><col className="w-[24%]" /><col className="w-[9%]" />
+          </colgroup>
           <thead>
             <tr className="border-b border-gray-200">
               <SortableTh label="Artikel" sortKey="article" sort={tableSorts["foundItems"]} onSort={(key) => toggleTableSort("foundItems", key)} className="px-3 py-3" />
@@ -3601,23 +3726,23 @@ const item = foundItem.individual_items;
       key={foundItem.id}
       className="border-b border-gray-100"
     >
-      <td className="px-3 py-3">
+      <td className="whitespace-nowrap px-3 py-3">
         {article?.name ?? "-"}
       </td>
 
-      <td className="px-3 py-3">
+      <td className="whitespace-nowrap px-3 py-3">
         {item?.unique_number ?? "-"}
       </td>
 
-      <td className="px-3 py-3">
+      <td className="whitespace-nowrap px-3 py-3">
         {size?.name ?? "-"}
       </td>
 
-      <td className="px-3 py-3">
+      <td className="whitespace-nowrap px-3 py-3">
         {foundItem.found_date ?? "-"}
       </td>
 
-      <td className="px-3 py-3">
+      <td className="whitespace-nowrap px-3 py-3">
         {member
           ? `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim()
           : "-"}
@@ -4947,6 +5072,20 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
 )}
 {activeSection === "personen" && (<>
 <div className="mt-8 rounded-2xl bg-white p-6 shadow">
+  <div className="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h2 className="text-lg font-bold text-gray-900">Actieve persoon zoeken</h2>
+      <p className="mt-1 text-sm text-gray-600">Zoek spelers, selectiespelers en trainers op naam of KNVB-nummer.</p>
+    </div>
+    <div className="flex flex-wrap gap-2">
+      <button type="button" onClick={() => setShowAddMember((value) => !value)} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">{showAddMember ? "Persoon toevoegen sluiten" : "+ Persoon toevoegen"}</button>
+      <button type="button" onClick={() => setShowOldMemberSearch((value) => !value)} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">{showOldMemberSearch ? "Oud lid zoeken sluiten" : "Oud lid zoeken"}</button>
+    </div>
+  </div>
+  <input type="text" value={memberSearch} onChange={(e) => setMemberSearch(e.target.value)} placeholder="Zoek op naam of KNVB-nummer" className="mt-4 w-full max-w-md rounded-lg border border-gray-300 px-4 py-2 text-sm" />
+</div>
+{showAddMember && (
+<div className="mt-4 rounded-2xl bg-white p-6 shadow">
   <h2 className="text-lg font-bold text-gray-900">
     Persoon toevoegen
   </h2>
@@ -5026,7 +5165,9 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
 )}
   </div>
 </div>
-<div className="mt-8 rounded-2xl bg-white p-6 shadow">
+)}
+{showOldMemberSearch && (
+<div className="mt-4 rounded-2xl bg-white p-6 shadow">
   <h2 className="text-lg font-bold text-gray-900">Oud lid zoeken</h2>
   <p className="mt-1 text-sm text-gray-600">
     Zoek uitgeschreven spelers, selectiespelers en trainers. Hun gegevens blijven bewaard en je kunt ze hier heractiveren.
@@ -5086,21 +5227,25 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
   })()}
   {oldMemberMessage && <p className="mt-3 text-sm text-green-600">{oldMemberMessage}</p>}
 </div>
-<div className="mt-8 overflow-hidden rounded-2xl bg-white shadow">
+)}
+<div id="personenlijst" className="mt-4 scroll-mt-6 overflow-hidden rounded-2xl bg-white shadow">
   <div className="border-b border-gray-200 px-6 py-4">
     <h2 className="text-xl font-bold text-gray-900">
       Personen
     </h2>
   </div>
 <div className="border-b border-gray-200 px-6 py-4">
-  <div className="flex flex-wrap gap-3">
-    <input
-      type="text"
-      value={memberSearch}
-      onChange={(e) => setMemberSearch(e.target.value)}
-      placeholder="Zoek op voor- of achternaam"
-      className="w-full max-w-md rounded-lg border border-gray-300 px-4 py-2 text-sm"
-    />
+  <div className="flex flex-wrap items-center gap-3">
+    <button type="button" onClick={() => {
+      if (showAllMembers) {
+        setShowAllMembers(false);
+      } else {
+        setMemberSearch("");
+        setShowAllMembers(true);
+      }
+    }} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+      {showAllMembers ? "Volledige lijst verbergen" : `Alle ${selectedGroup ? selectedGroup.toLowerCase() + "s" : "personen"} tonen`}
+    </button>
 
     <select
       value={memberSort}
@@ -5143,12 +5288,18 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
   if (key === "missing") return Number(member.missing_total ?? 0);
   if (key === "status") return member.clothing_status ?? "";
   return "";
-}).map((member) => (
+}).filter(() => memberSearch.trim() !== "" || showAllMembers).map((member) => (
          <tr
   key={member.member_id}
- onClick={() => {
+ onClick={async () => {
   setReturnMessages({});
-  loadMemberDetails(member.member_id);
+  await loadMemberDetails(member.member_id);
+  window.setTimeout(() => {
+    document.getElementById("kledingdetails")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }, 0);
 }}
   className="cursor-pointer border-t border-gray-100 hover:bg-gray-50"
 >
@@ -5185,18 +5336,45 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
         ))}
       </tbody>
     </table>
+    {memberSearch.trim() === "" && !showAllMembers && (
+      <p className="px-6 py-5 text-sm text-gray-600">Begin met zoeken. De volledige lijst blijft verborgen zodat je minder hoeft te scrollen.</p>
+    )}
+    {memberSearch.trim() !== "" && filteredMembers.length === 0 && (
+      <p className="px-6 py-5 text-sm text-gray-600">Geen actieve persoon gevonden.</p>
+    )}
   </div>
 </div>
 {selectedMemberId !== null && (
-  <div className="mt-8 overflow-hidden rounded-2xl bg-white shadow">
-    <div className="border-b border-gray-200 px-6 py-4">
-     <h2 className="text-xl font-bold text-gray-900">
-  Kledingdetails —{" "}
-  {members.find((member) => member.member_id === selectedMemberId)
-    ?.first_name}{" "}
-  {members.find((member) => member.member_id === selectedMemberId)
-    ?.last_name}
-</h2>
+  <div id="kledingdetails" className="mt-8 scroll-mt-6 overflow-hidden rounded-2xl bg-white shadow">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 px-6 py-4">
+      <h2 className="text-xl font-bold text-gray-900">
+        Kledingdetails —{" "}
+        {members.find((member) => member.member_id === selectedMemberId)
+          ?.first_name}{" "}
+        {members.find((member) => member.member_id === selectedMemberId)
+          ?.last_name}
+      </h2>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() =>
+            document.getElementById("personenlijst")?.scrollIntoView({
+              behavior: "smooth",
+              block: "start",
+            })
+          }
+          className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+        >
+          ↑ Terug naar personenlijst
+        </button>
+        <button
+          type="button"
+          onClick={closeMemberDetails}
+          className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+        >
+          ✕ Kledingdetails sluiten
+        </button>
+      </div>
     </div>
     <div className="border-b border-gray-200 bg-gray-50 px-6 py-4">
       <p className="mb-3 text-sm font-semibold text-gray-900">Persoonsgegevens aanpassen</p>
@@ -5216,20 +5394,16 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
     </p>
 
     {selectedMemberFoundItems.map((foundItem) => {
-      const assignment = currentAssignments.find(
-        (assignment) =>
-          assignment.member_id === selectedMemberId &&
-          foundItem.individual_item_id ===
-            inventoryItems.find(
-              (item) => item.unique_number === assignment.unique_number
-            )?.id
-      );
+      const foundInventoryItem = inventoryItems.find((item) => item.id === foundItem.individual_item_id);
+      const foundArticle = articleTypes.find((article) => article.id === foundInventoryItem?.article_type_id);
+      const foundSize = sizes.find((size) => size.id === foundInventoryItem?.size_id);
 
       return (
         <div key={foundItem.id} className="mt-2 text-sm text-yellow-800">
           <p>
-            {assignment?.article ?? "Kledingstuk"} — nummer{" "}
-            {assignment?.unique_number ?? "-"}
+            {foundArticle?.name ?? "Kledingstuk"} — nummer{" "}
+            {foundInventoryItem?.unique_number ?? "-"}
+            {foundSize?.name ? ` — maat ${foundSize.name}` : ""}
           </p>
 
           {foundItem.note && (
@@ -5606,7 +5780,29 @@ className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover
     ))}
   </div>
 )}
-      <table className="w-full text-left">
+      <div className="border-b border-gray-200 px-6 py-4">
+  <button type="button" onClick={toggleMemberHistory} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+    {showMemberHistory ? "Historie verbergen" : "Historie tonen"}
+  </button>
+  {memberHistoryMessage && <p className="mt-3 text-sm text-red-600">{memberHistoryMessage}</p>}
+  {showMemberHistory && !memberHistoryMessage && (
+    <div className="mt-4">
+      {memberHistory.length === 0 ? <p className="text-sm text-gray-600">Geen afgesloten kledinghistorie gevonden.</p> : (
+        <div className="overflow-x-auto rounded-lg border border-gray-200">
+          <table className="w-full min-w-[760px] text-left">
+            <thead className="bg-gray-50"><tr><th className="px-3 py-2 text-sm font-medium text-gray-600">Kledingstuk</th><th className="px-3 py-2 text-sm font-medium text-gray-600">Nummer</th><th className="px-3 py-2 text-sm font-medium text-gray-600">Maat</th><th className="px-3 py-2 text-sm font-medium text-gray-600">Uitgegeven</th><th className="px-3 py-2 text-sm font-medium text-gray-600">Ingeleverd</th><th className="px-3 py-2 text-sm font-medium text-gray-600">Conditie retour</th></tr></thead>
+            <tbody>{memberHistory.map((historyItem) => {
+              const historyArticle = articleTypes.find((article) => article.id === historyItem.individual_items?.article_type_id);
+              const historySize = sizes.find((size) => size.id === historyItem.individual_items?.size_id);
+              return <tr key={historyItem.id} className="border-t border-gray-100"><td className="px-3 py-2 text-sm text-gray-700">{historyArticle?.name ?? "-"}</td><td className="px-3 py-2 text-sm text-gray-700">{historyItem.individual_items?.unique_number ?? "-"}</td><td className="px-3 py-2 text-sm text-gray-700">{historySize?.name ?? "-"}</td><td className="whitespace-nowrap px-3 py-2 text-sm text-gray-700">{historyItem.issued_date ?? "-"}</td><td className="whitespace-nowrap px-3 py-2 text-sm text-gray-700">{historyItem.returned_date ?? "-"}</td><td className="px-3 py-2 text-sm text-gray-700">{historyItem.condition_at_return ?? "-"}</td></tr>;
+            })}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )}
+</div>
+<table className="w-full text-left">
         <thead className="bg-gray-50">
           <tr>
             <SortableTh label="Kledingstuk" sortKey="article" sort={tableSorts["clothingDetails"]} onSort={(key) => toggleTableSort("clothingDetails", key)} className="px-6 py-3 text-sm font-medium text-gray-600" />
